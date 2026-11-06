@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+tmp/
+samples/
+package-lock.json
+# Fixtures are byte-exact data (PDF xref offsets, captured HTML); never reformat them.
+tests/fixtures/
+# Planning docs are written by hand and not machine-formatted.
+*.md

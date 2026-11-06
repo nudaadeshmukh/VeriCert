@@ -83,3 +83,35 @@ explicit port (`beta.nptel.ac.in:443`); (d) the "Jan–Apr 2025" sample is label
 **Root cause:** a double backslash inside the heredoc was collapsed to a single one by the shell, producing a broken regex.
 **Fix:** the line was rewritten with the editor tool, without a backslash-heavy regex.
 **Guard:** none needed beyond running the script; it now exits cleanly and both PDFs load in pdf.js.
+
+## C-006 — Custom spacing tokens broke Tailwind size keywords (`max-w-xl` collapsed to a sliver)
+**Phase:** 1 · **Date:** 2026-11-06
+**Symptom:** The placeholder page's lead paragraph rendered one word per line, about 50 px wide.
+Unit tests, lint, build and all three first Playwright tests passed; a screenshot showed it.
+**Root cause:** `app/globals.css` defined DESIGN.md's spacing names as `--spacing-xs … --spacing-xl`
+in Tailwind v4's `@theme`. Those names are also the size keywords used by `max-w-xl`, `w-md` etc.,
+so the 32 px spacing value was used as a max-width.
+**Fix:** removed the custom spacing tokens. DESIGN.md's scale (4, 8, 12, 16, 24, 32, 48, 64, 96 px)
+equals Tailwind's default numeric scale (1, 2, 3, 4, 6, 8, 12, 16, 24), so the mapping is documented in
+`app/globals.css` and pages use `p-4`, `mt-16` etc.
+**Guard:** `e2e/smoke.spec.js` "lead paragraph is not squeezed" checks the paragraph's rendered
+width (> 400 px) and height (< 120 px) in a real browser. Visual review before approving any UI
+phase is also required: assertions on colours alone did not catch this.
+
+## C-007 — Next.js 16 wrote an unrequested `AGENTS.md` into the repo
+**Phase:** 1 · **Date:** 2026-11-06
+**Symptom:** the first `next dev` printed "Generated AGENTS.md for AI agents" and created
+`AGENTS.md` telling agents to read `node_modules/next/dist/docs/` first.
+**Root cause:** a default feature (`agentRules`) of this Next version.
+**Fix:** deleted the file and set `agentRules: false` in `next.config.js`. `CLAUDE.md` stays the single
+source of project instructions.
+**Guard:** `next.config.js` comment; `git status` is checked before each commit.
+
+## C-008 — A long `npm install` was cut off by the tool timeout and left `package.json` without devDependencies
+**Phase:** 1 · **Date:** 2026-11-06
+**Symptom:** after a two-command install exceeded 120 s, `package.json` listed only the four
+runtime dependencies; `node_modules` was partly populated.
+**Root cause:** the shell call was moved to the background mid-install.
+**Fix:** re-ran the devDependencies install on its own in the background (exit 0); verified every
+version in `package.json` is exact (no `^` or `~`).
+**Guard:** none needed; `npm ci` in CI fails if the lockfile and `package.json` disagree.

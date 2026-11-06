@@ -1,0 +1,136 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens from DESIGN.md (front matter), mapped to Tailwind v4 theme variables.
+ * Token names are kept identical so utilities read like the spec: `bg-canvas`, `text-ash`,
+ * `rounded-app-xs`, `p-section`, `text-display-md`.
+ *
+ * Font: DESIGN.md names the proprietary `waldenburgNormal`; its own "Note on Font
+ * Substitutes" prescribes Inter with display tracking pulled 0.5px tighter, and IBM Plex
+ * Mono unchanged. That is what is used here (loaded in app/layout.js).
+ */
+@theme {
+  /* colors */
+  --color-primary: #0b0b0b;
+  --color-on-primary: #ffffff;
+  --color-brand: #f36458;
+  --color-brand-deep: #dd0000;
+  --color-ink: #0b0b0b;
+  --color-ink-soft: #212121;
+  --color-graphite: #353535;
+  --color-slate: #3c4758;
+  --color-slate-soft: #505b6c;
+  --color-mute: #797979;
+  --color-ash: #b9b9b9;
+  --color-hairline: #ededed;
+  --color-hairline-soft: #353535;
+  --color-canvas: #0b0b0b;
+  --color-canvas-soft: #212121;
+  --color-canvas-light: #ffffff;
+  --color-canvas-paper: #ededed;
+  --color-on-canvas-light: #0b0b0b;
+  --color-link-blue: #0052ef;
+  --color-link-blue-soft: #55beff;
+  --color-surface-blue-bg: #afe3ff;
+  --color-success: #37cd84;
+  --color-error: #dd0000;
+
+  /* fonts */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* typography scale (size / line-height / tracking); display tracking is DESIGN.md's
+     value minus 0.5px, the Inter compensation from "Note on Font Substitutes" */
+  --text-display-mega: 112px;
+  --text-display-mega--line-height: 1;
+  --text-display-mega--letter-spacing: -5px;
+  --text-display-xl: 72px;
+  --text-display-xl--line-height: 1.05;
+  --text-display-xl--letter-spacing: -3.38px;
+  --text-display-lg: 60px;
+  --text-display-lg--line-height: 0.8;
+  --text-display-md: 48px;
+  --text-display-md--line-height: 1.08;
+  --text-display-md--letter-spacing: -2.18px;
+  --text-display-sm: 38px;
+  --text-display-sm--line-height: 1.1;
+  --text-display-sm--letter-spacing: -1.64px;
+  --text-heading-md: 32px;
+  --text-heading-md--line-height: 1.13;
+  --text-heading-md--letter-spacing: -0.32px;
+  --text-heading-sm: 24px;
+  --text-heading-sm--line-height: 1.1;
+  --text-heading-sm--letter-spacing: -0.24px;
+  --text-subtitle: 18px;
+  --text-subtitle--line-height: 1.5;
+  --text-subtitle--letter-spacing: -0.18px;
+  --text-body: 16px;
+  --text-body--line-height: 1.5;
+  --text-body-sm: 15px;
+  --text-body-sm--line-height: 1.5;
+  --text-body-sm--letter-spacing: -0.15px;
+  --text-caption: 13px;
+  --text-caption--line-height: 1.5;
+  --text-caption-tight: 13px;
+  --text-caption-tight--line-height: 1.3;
+  --text-caption-tight--letter-spacing: -0.13px;
+  --text-meta: 12px;
+  --text-meta--line-height: 1.5;
+  --text-meta--letter-spacing: -0.12px;
+  --text-mono-eyebrow: 13px;
+  --text-mono-eyebrow--line-height: 1.5;
+  --text-mono-caps: 11px;
+  --text-mono-caps--line-height: 1.5;
+  --text-mono-micro: 10px;
+  --text-mono-micro--line-height: 1.3;
+  --text-button-lg: 16px;
+  --text-button-lg--line-height: 1.5;
+  --text-button-sm: 13px;
+  --text-button-sm--line-height: 1.3;
+  --text-button-sm--letter-spacing: -0.13px;
+  --text-button-uppercase: 11px;
+  --text-button-uppercase--line-height: 1.5;
+
+  /* radii */
+  --radius-app-xs: 3px;
+  --radius-app-sm: 4px;
+  --radius-app-md: 5px;
+  --radius-app-lg: 6px;
+  --radius-marketing: 12px;
+
+  /*
+   * Spacing: DESIGN.md's scale (xxs 4, xs 8, sm 12, md 16, lg 24, xl 32, xxl 48, section 64,
+   * section-lg 96 px) is exactly Tailwind's default numeric scale, so no custom tokens are
+   * defined: xxs=1, xs=2, sm=3, md=4, lg=6, xl=8, xxl=12, section=16, section-lg=24 (p-4 = 16px).
+   * Named --spacing-xs..xl tokens must NOT be added: they hijack size keywords such as
+   * max-w-xl (see docs/challenges-log.md C-006).
+   */
+
+  /* breakpoints from DESIGN.md "Responsive Behavior" (mobile-first min-widths) */
+  --breakpoint-xxxs: 376px;
+  --breakpoint-xxs: 480px;
+  --breakpoint-xs: 768px;
+  --breakpoint-sm: 960px;
+  --breakpoint-md: 1100px;
+  --breakpoint-lg: 1200px;
+  --breakpoint-xl: 1440px;
+  --breakpoint-2xl: 1640px;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color: var(--color-ash);
+  }
+  body {
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.5;
+  }
+  /* DESIGN.md text-input-focused: no outline, 2px link-blue ring. Applied to every focusable
+     element so keyboard users always see where they are. */
+  :focus-visible {
+    outline: 2px solid var(--color-link-blue-soft);
+    outline-offset: 2px;
+  }
+}
