@@ -1,0 +1,79 @@
+{
+  "_note": "Anonymised text-layer dump of a genuine NPTEL PDF (Jul-Sep 2026, 8-week, 91/100, certificate served from nptel.ac.in/verify/<ID>/certificate.pdf). Page 842x595 pt. Items in text-layer order.",
+  "page": {
+    "width": 841.92,
+    "height": 595.44
+  },
+  "items": [
+    {
+      "str": "ASHA RAMESH KULKARNI",
+      "x": 311,
+      "y": 398,
+      "w": 219,
+      "h": 15
+    },
+    {
+      "str": "ENTREPRENEURSHIP AND IP STRATEGY",
+      "x": 264,
+      "y": 331,
+      "w": 314,
+      "h": 15
+    },
+    {
+      "str": "91%",
+      "x": 487,
+      "y": 295,
+      "w": 29,
+      "h": 15
+    },
+    {
+      "str": "25/25",
+      "x": 371,
+      "y": 262,
+      "w": 39,
+      "h": 14
+    },
+    {
+      "str": "66/75",
+      "x": 569,
+      "y": 262,
+      "w": 40,
+      "h": 14
+    },
+    {
+      "str": "1910",
+      "x": 550,
+      "y": 229,
+      "w": 29,
+      "h": 14
+    },
+    {
+      "str": "JUL-SEP 2026",
+      "x": 371,
+      "y": 134,
+      "w": 100,
+      "h": 14
+    },
+    {
+      "str": "(8 week course)",
+      "x": 379,
+      "y": 119,
+      "w": 83,
+      "h": 10
+    },
+    {
+      "str": "No. of credits recommended: 3",
+      "x": 622,
+      "y": 19,
+      "w": 159,
+      "h": 10
+    },
+    {
+      "str": "Roll No: NPTEL26HS164S000000001",
+      "x": 41,
+      "y": 19,
+      "w": 218,
+      "h": 12
+    }
+  ]
+}

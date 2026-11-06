@@ -1,0 +1,63 @@
+{
+  "_note": "SYNTHETIC. variant-long-name. All values invented.",
+  "page": {
+    "width": 841.92,
+    "height": 595.44
+  },
+  "items": [
+    {
+      "str": "VENKATARAMANAN SUBRAMANIAM PADMANABHAN IYENGAR-KRISHNAMURTHY",
+      "x": 311,
+      "y": 398
+    },
+    {
+      "str": "INTRODUCTION TO MACHINE LEARNING",
+      "x": 264,
+      "y": 331
+    },
+    {
+      "str": "91%",
+      "x": 487,
+      "y": 295
+    },
+    {
+      "str": "24/25",
+      "x": 371,
+      "y": 262
+    },
+    {
+      "str": "70/75",
+      "x": 569,
+      "y": 262
+    },
+    {
+      "str": "1910",
+      "x": 550,
+      "y": 229
+    },
+    {
+      "str": "JUL-SEP 2026",
+      "x": 371,
+      "y": 134
+    },
+    {
+      "str": "(8 week course)",
+      "x": 379,
+      "y": 119
+    },
+    {
+      "str": "No. of credits recommended: 3",
+      "x": 622,
+      "y": 19
+    },
+    {
+      "str": "Roll No: NPTEL26HS164S000000002",
+      "x": 41,
+      "y": 19
+    }
+  ],
+  "expected": {
+    "assignment": 24,
+    "exam": 70
+  }
+}
