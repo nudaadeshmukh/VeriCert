@@ -25,17 +25,17 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 
 | | |
 |---|---|
-| **Current phase** | Phase 0 complete, awaiting user approval. |
-| **Next phase** | Phase 1: Project foundation (needs the user's GitHub, Vercel and MongoDB Atlas setup) |
-| **Production URL** | — |
-| **Preview URL** | — |
-| **Does it run?** | No app yet. Only repo hygiene, fixtures and findings (`NOTES.md`). |
-| **Latest measured results** | NPTEL verification pages: 0/20 retries needed; median 135 ms (shape A), 77 ms (shape B), from the dev machine. Not yet measured from Vercel. |
+| **Current phase** | Phase 1 complete, awaiting user review. |
+| **Next phase** | Phase 2: Certificate extraction engine (not started; waits for approval) |
+| **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`) |
+| **Preview URL** | None. No Preview deployment exists (see Phase 1 deviation). |
+| **Does it run?** | Yes: an empty shell (placeholder page + `/api/health`) with a live Atlas connection, locally and on Vercel. No sign-in, no verification yet. |
+| **Latest measured results** | Production `/api/health`: 200 ×5, `db:"up"`, version `0.1.0+107e806`; 0.49–0.52 s warm, 2.47 s first call. From the dev machine. NPTEL verification page fetch: 0/20 retries, median 135 ms (shape A), 77 ms (shape B), dev machine only (Phase 0). |
 
 | Phase | Status |
 |---|---|
 | 0 — Specification check and samples | ✅ complete (gate passed from a local script) |
-| 1 — Project foundation | ⏳ not started |
+| 1 — Project foundation | ✅ complete (verified on Production, not Preview) |
 | 2 — Certificate extraction engine | ⏳ not started |
 | 3 — Verification service and comparison | ⏳ not started |
 | 4 — Tampering checks | ⏳ not started |
@@ -156,6 +156,111 @@ create the MongoDB Atlas M0 cluster (Mumbai) with a database user and network ac
 | 6 | NPTEL fetch proven from this machine only; Vercel IPs unproven (Phase 3 gate) | High | Phase 3 |
 | 7 | The scratch scripts in `tmp/phase0/` are not in git. Their findings are in `NOTES.md` | Low | None |
 | 8 | The `.env` file has `EMAIL_FROM` set to Resend's test sender (`onboarding@resend.dev`); the test sender can only mail the Resend account owner | Low | Phase 5 |
+
+---
+
+## Phase 1 — Project foundation
+
+**Status:** complete, with one deviation: the live check was done on the **Production** deployment
+of `main`, not on a Preview deployment.
+
+**Deviation from the plan (recorded at the user's request):** the plan says "a preview deploy
+succeeds and `/api/health` returns `db: "up"`". The user imported the project into Vercel after
+pushing, so no Preview deployment of branch `phase-1-check` was created. The check was done on the
+Production deployment of `main` (commit `107e806`) at https://veri-cert-bay.vercel.app. That still
+proves Atlas network access from Vercel's servers (the acceptance reason), but the **Preview**
+environment's variable scope (`MONGODB_URI`, `MONGODB_DB` ticked for Preview) has not been
+exercised by a deployment. Re-check with the first real Preview deployment (Phase 5 at the latest).
+
+**Completed features:**
+- `package.json`: JavaScript ES-module app, `engines.node` `24.x`, scripts `dev`, `build`, `start`,
+  `test`, `test:e2e`, `lint`, `format`, `db:indexes`. All versions exact.
+- `app/layout.js`, `app/page.js`: placeholder home page ("This site is being set up…"), Inter +
+  IBM Plex Mono via `next/font`, no sign-in and no claims about features that do not exist.
+- `app/globals.css`: Tailwind v4 `@theme` built from DESIGN.md: all 23 colours, the 17-step type
+  scale (size, line-height, tracking), the radii and the breakpoints. Spacing needs no tokens
+  (DESIGN.md's scale equals Tailwind's default; see C-006). `waldenburgNormal` is proprietary,
+  so Inter is used as DESIGN.md's "Note on Font Substitutes" prescribes, with display tracking
+  0.5 px tighter.
+- `src/lib/db/client.js`: one `MongoClient` cached on `globalThis._mongoClientPromise`; `getDb()`
+  requires both `MONGODB_URI` and `MONGODB_DB` and throws if either is missing or blank (no
+  defaults); 5 s connect/selection timeouts; a failed connect is not cached.
+- `src/lib/db/indexes.js` and `scripts/db-indexes.mjs` (`npm run db:indexes`): idempotent
+  `ensureIndexes()` for every index in the plan's data model; a changed TTL is applied with
+  `collMod`; `RESULT_RETENTION_DAYS` is validated (1–3650, default 180, never a silent fallback).
+- `app/api/health/route.js`: `GET /api/health` → `{ ok, db: "up"|"down", version }`, pings Atlas;
+  503 and `db:"down"` on any failure; no error text in the response; `Cache-Control: no-store`.
+- `src/lib/version.js`: `0.1.0+<7-char commit SHA>` (`+dev` locally).
+- `eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`, `vitest.config.js`,
+  `playwright.config.js`, `jsconfig.json`, `postcss.config.mjs`, `next.config.js`
+  (`poweredByHeader: false`, `agentRules: false`).
+- `.github/workflows/ci.yml`: lint, unit tests, build on every push and pull request; no secrets.
+- `README.md` skeleton: setup, environment table, commands, layout.
+- `CLAUDE.md`: new rule 13 and a changed end-of-phase step 5 (see "Changes to earlier phases").
+
+**Indexes created in Atlas database `vericert`** (via `npm run db:indexes`, run against the real
+cluster; collections `runs`, `results`, `audit_logs`, `rate_limits` now exist, empty):
+`runs`: `userId_createdAt`, `createdAt_ttl` (180 d). `results`: `runId`, `userId_createdAt`,
+`candidateName_text` (`default_language: none`), `createdAt_ttl` (180 d). `audit_logs`:
+`createdAt_ttl` (365 d). `rate_limits`: `windowStart_ttl` (1 h).
+
+**Files modified:** `CLAUDE.md`, `docs/progress.md`, `docs/challenges-log.md` (C-006 to C-008).
+
+**Dependencies added (exact versions):**
+- Runtime: next@16.4.5, react@19.3.1, react-dom@19.3.1, mongodb@7.8.0
+- Dev: tailwindcss@4.3.4, @tailwindcss/postcss@4.3.4, postcss@8.5.32, eslint@10.14.0,
+  eslint-config-next@16.4.5, prettier@3.9.10, prettier-plugin-tailwindcss@0.8.1, vitest@5.1.0,
+  @playwright/test@1.65.0
+- Node v24.18.1 locally; Playwright Chromium Headless Shell 158.0.8127.18.
+
+**Tests:**
+- Vitest: 23 passed in 3 files (was 0): env fail-closed behaviour, index specs, TTL `collMod`
+  path, retention parsing, health route (up, down without error leak, missing config).
+- Playwright: 4 passed (placeholder renders, dark canvas token, paragraph not squeezed,
+  `/api/health` shape and headers), against `next dev` with the real Atlas database.
+- Lint: clean · Build: passes, also with `MONGODB_URI` and `MONGODB_DB` empty.
+- CI (GitHub Actions, workflow "CI"): completed with conclusion `success` on `main` and on
+  `phase-1-check`, both at commit `107e806` (read from the public GitHub API).
+
+**Measured results:**
+| Metric | Value | How measured |
+|---|---|---|
+| Local `/api/health`, first call after server start | HTTP 200, `db:"up"`, 1,002 ms (816 ms application code, includes the Atlas connect) | one `curl` against `next dev`, Atlas M0 Mumbai |
+| Production `/api/health` | 5 × HTTP 200, `{"ok":true,"db":"up","version":"0.1.0+107e806"}`; 0.49, 0.49, 0.51, 0.52 s warm and 2.47 s on the first call | 5 sequential `curl` calls from the dev machine; includes network round trip from this machine, not server time |
+| Production headers | `Cache-Control: no-store`; no `X-Powered-By` | `curl -I` |
+| Production `/` | HTTP 200 | `curl` |
+| `npm audit --omit=dev` | 0 vulnerabilities | `npm audit` |
+| `npm audit` (all) | 10 moderate, all via `minimatch` in the lint toolchain | `npm audit`; see Known issues #1 |
+
+**Changes to earlier phases:**
+- `CLAUDE.md` (a planning document, not a phase entry): added rule 13 ("Never commit or push",
+  the user does all commits and pushes) and changed step 5 of the end-of-phase routine to "Run
+  `git status`, confirm that `samples/`, `.env` and real data are not staged, and suggest a commit
+  message. Do not commit." The earlier commits `23de463`, `dd9479c` and `107e806` were made
+  by Claude before this rule existed.
+- Phase 0's entry is unchanged. Its Known issue #3 about the `.env` `EMAIL_FROM` is still open (Phase 5).
+
+**Phase 0 items handled here:** the `.gitignore`/`.gitattributes` protections were exercised: `git
+status` shows nothing from `samples/`, `tmp/` or `.env`. Fixtures and `*.md` are excluded from
+Prettier so byte-exact fixtures are never reformatted. Phase 0 issues #1, #2, #4, #5, #6 belong to
+Phases 2–4 and were not touched (rule 8).
+
+**Remaining work:** Phase 2 (certificate extraction engine, in the browser). Not started.
+
+**Known issues / TODOs:**
+| # | Item | Priority | Blocking |
+|---|---|---|---|
+| 1 | `npm audit` reports 10 moderate findings (ReDoS in `minimatch` 7–11 inside `eslint@10` and `typescript-eslint` via `eslint-config-next`). Dev-only: not in the production bundle, lint only reads our own code. `npm audit fix --force` would only downgrade ESLint to 9 and would not remove the `typescript-eslint` chain, so not applied. Revisit in Phase 8 | Low | Phase 8 audit |
+| 2 | No Preview deployment has been verified (deviation above). Preview variable scope untested | Medium | First Preview use |
+| 3 | GitHub Actions are pinned to major tags (`actions/checkout@v4`, `actions/setup-node@v4`), not commit SHAs | Low | Phase 8 |
+| 4 | Auth.js adapter collections (`users`, `accounts`, `sessions`, `verification_tokens`) and their indexes (for example a unique `users.email`) are not created; they belong to Phase 5. A unique email index must exist before accounts are created | High | Phase 5 |
+| 5 | `rate_limits` has only its TTL index; a unique `{key, windowStart}` index for atomic upserts is not in the plan's list and is left for Phase 8 | Medium | Phase 8 |
+| 6 | `/api/health` is public and unthrottled; it does one Atlas ping per call. Rate limiting is Phase 8 | Low | Phase 8 |
+| 7 | Security headers (CSP, HSTS and others) are not set; Phase 8 | Medium | Phase 8 |
+| 8 | Phase 1 deliberately has no layout chrome, 404 or error page (Phase 9). Next's defaults apply | Low | Phase 9 |
+| 9 | The local `.env` has two extra variables (`MONGODB_USERNAME`, `MONGODB_PASSWORD`) and a quoted `MONGODB_URI`. Nothing reads the extras. In Vercel the URI was entered without quotes | Low | None |
+| 10 | The e2e suite runs locally only; CI does not run Playwright (plan: lint, unit tests, build) | Low | None |
+| 11 | The `db:indexes` script ran against the same Atlas database that Production uses (there is one `vericert` database; no separate dev database) | Medium | Phase 6 tests need a separate test database |
 
 ---
 

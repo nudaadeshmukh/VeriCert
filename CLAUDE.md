@@ -76,6 +76,11 @@ Pin every dependency to an exact version. Record the versions in `docs/progress.
     example, NPTEL's format has changed), stop and ask. Don't decide silently.
 12. **Test in a real browser.** Node unit tests can't catch browser-only bugs (see Known
     facts). Every phase that touches browser code ends with a Playwright run.
+13. **Never commit or push.** Do not run `git commit`, `git push`, or any command that
+    changes the remote (including creating or deleting remote branches or tags, and
+    `gh`/API calls that write to GitHub). The user makes all commits and pushes. Read-only
+    git commands (`status`, `diff`, `log`, `ls-remote`) are fine. Instead, suggest a commit message at the
+    end of each phase.
 
 ## Result semantics
 - **Verification:** `Successful` when both marks equal the verification source (tolerance
@@ -142,6 +147,7 @@ DESIGN.md, CLAUDE.md, README.md, .env.example
    its "Current state" table.
 4. Log anything that broke or surprised you in `docs/challenges-log.md` as you go, not at
    the end.
-5. Commit with a clear message. Never include `samples/`, `.env` or real data.
+5. Run `git status`, confirm that `samples/`, `.env` and real data are not staged, and
+   suggest a commit message. Do not commit.
 6. **Stop, and give the user a short status:** done, measured, known issues, next phase.
    Wait for approval before starting the next phase.
