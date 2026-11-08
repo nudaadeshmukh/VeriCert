@@ -4,8 +4,9 @@ PICT · NPTEL certificate verification. Staff upload a folder of NPTEL certifica
 each one, checks it against NPTEL's own verification source, runs tampering checks, and lets the
 user export a CSV. Only verified `@pict.edu` accounts can use it.
 
-> **Status: Phase 2 of 10 (certificate extraction engine).** The browser can read a certificate
-> (PDF, JPG or PNG); there is no sign-in, upload page or server-side verification yet. See `docs/progress.md` for the current
+> **Status: Phase 3 of 10 (verification service).** The browser can read a certificate (PDF, JPG or
+> PNG) and `POST /api/verify` can fetch NPTEL's values for a QR URL; that endpoint is temporarily
+> unauthenticated and enabled only in dev or on a Vercel Preview. There is no sign-in or upload page yet. See `docs/progress.md` for the current
 > state, `docs/implementation_plan.md` for the plan, and `CLAUDE.md` for the rules.
 
 Uploaded certificate files never leave the browser. Only the verification URL, the extracted
@@ -48,6 +49,8 @@ in Vercel for Preview and Production.
 | `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`         | Phase 5     | Google Cloud Console OAuth client                              |
 | `RESEND_API_KEY`, `EMAIL_FROM`                 | Phase 5     |                                                                |
 | `ALLOWED_EMAIL_DOMAIN`, `ADMIN_EMAILS`         | Phase 5     |                                                                |
+| `VERIFY_DEV_ENDPOINT`                          | Phase 3 only | `1` on Vercel **Preview** only; removed in Phase 5. Ignored on Production |
+| `VERCEL_AUTOMATION_BYPASS_SECRET`              | Phase 3 only | Local `.env` only, for `npm run smoke:nptel` against a Preview |
 | `RATE_LIMIT_VERIFY_PER_MIN`                    | Phase 8     |                                                                |
 | `RESULT_RETENTION_DAYS`                        | Phase 1     | Read by `npm run db:indexes` (TTL); default 180                |
 
@@ -62,6 +65,7 @@ in Vercel for Preview and Production.
 | `npm run format`     | Prettier write                                                       |
 | `npm run build`      | Production build (must pass before a phase is complete)              |
 | `npm run db:indexes` | Create/update all MongoDB indexes, including TTL changes             |
+| `npm run smoke:nptel` | LIVE test against NPTEL (not in CI). `-- --base-url=https://<preview>` tests a deployment's `/api/verify`; needs the gitignored `samples/smoke.expected.local.json` |
 
 First time only: `npx playwright install chromium`. The real-sample e2e tests read `samples/` and
 `samples/expected.local.json` (both gitignored, never committed) and are skipped when absent.
@@ -73,6 +77,9 @@ app/                 Next.js routes (pages and api/)
 src/lib/db/          client.js (cached MongoClient), indexes.js
 src/lib/extract/     browser extraction engine: index.js (extractCertificate), pdf.js, qr.js,
                      ocr.js, image.js, vendor.js, and parse.js (pure; shared with the server later)
+src/lib/verify/      server: fetchSource.js (allowlisted fetch), parseSource.js, readPdf.js (unpdf),
+                     dedupe.js, guard.js (temporary endpoint guard), index.js (verifySource)
+src/lib/compare.js   marks (±0.01) and name/course checks
 src/lib/version.js   build version shown by /api/health
 app/dev/extract/     dev-only scratch page for the browser tests (404 in production)
 scripts/             db-indexes.mjs, copy-vendor.mjs
@@ -88,5 +95,7 @@ Later phases fill in the rest of the layout described in `CLAUDE.md`.
 
 Vercel (Hobby) with the GitHub repo imported; preview deploys on every push. Add `MONGODB_URI`
 and `MONGODB_DB` for Preview and Production, then check `<deployment-url>/api/health`.
+
+`vercel.json` pins the serverless functions to `bom1` (Mumbai), next to the Atlas cluster and NPTEL's servers.
 
 The README's architecture diagram, NPTEL-format update guide and runbook are written in Phase 10.

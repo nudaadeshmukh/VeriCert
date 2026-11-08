@@ -160,6 +160,35 @@ export function findRollNo(text) {
   return ROLL_RE.exec(normalizeText(text))?.[0];
 }
 
+// ---------------------------------------------------------------- NPTEL host allowlist
+
+/**
+ * Is this hostname `nptel.ac.in` or a subdomain of it? Used for the QR payload here and, via
+ * `isAllowedNptelUrl`, for every server-side fetch and redirect hop (CLAUDE.md rule 3), so there is
+ * one definition. Takes `URL.hostname`, never `URL.host`: look-alikes such as
+ * `nptel.ac.in.evil.com` and `evilnptel.ac.in` fail.
+ * @param {string} hostname
+ */
+export function isNptelHostname(hostname) {
+  const h = hostname.toLowerCase();
+  return h === 'nptel.ac.in' || h.endsWith('.nptel.ac.in');
+}
+
+/**
+ * May the server fetch this URL? https only, no credentials, port 443 only (NPTEL's own 302s carry
+ * an explicit `:443`), and an NPTEL hostname.
+ * @param {URL} u
+ */
+export function isAllowedNptelUrl(u) {
+  return (
+    u.protocol === 'https:' &&
+    !u.username &&
+    !u.password &&
+    (u.port === '' || u.port === '443') &&
+    isNptelHostname(u.hostname)
+  );
+}
+
 // ---------------------------------------------------------------- verification URL
 
 /**
@@ -186,12 +215,7 @@ export function parseVerifyUrl(raw) {
   if (u.protocol !== 'https:')
     return fail('qr_unsupported_scheme', `The QR URL uses ${u.protocol}, only https is accepted`);
   const host = u.hostname.toLowerCase();
-  if (
-    u.username ||
-    u.password ||
-    (u.port !== '' && u.port !== '443') ||
-    !(host === 'nptel.ac.in' || host.endsWith('.nptel.ac.in'))
-  ) {
+  if (!isAllowedNptelUrl(u)) {
     return fail('qr_not_nptel', 'The QR code points outside nptel.ac.in');
   }
   const verify = /^\/verify\/([A-Za-z0-9-]{6,64})\/?$/.exec(u.pathname);
@@ -250,8 +274,11 @@ function toLines(items, tolerance) {
  *
  * @param {TextItem[]} rawItems
  * @param {{ page?: { height: number } }} [opts]
+ * `total` is the bare overall score between the course and the marks row (`91%` in the 2026
+ * layout, `84` in the 2025 one); it is informational and its absence is not an error.
+ *
  * @returns {{ name: string | null, course: string | null, assignment: number | null,
- *   exam: number | null, rollNo?: string, errors: ParseError[] }}
+ *   exam: number | null, total: number | null, rollNo?: string, errors: ParseError[] }}
  */
 export function parseCertificateText(rawItems, { page } = {}) {
   const items = rawItems
@@ -267,6 +294,8 @@ export function parseCertificateText(rawItems, { page } = {}) {
   let name = null;
   /** @type {string | null} */
   let course = null;
+  /** @type {number | null} */
+  let total = null;
 
   // The marks row: any item whose own text carries an n/25 or n/75.
   const markItems = items.filter((i) => /\d\s*\/\s*(25|75)(?!\d)/.test(i.str));
@@ -281,6 +310,14 @@ export function parseCertificateText(rawItems, { page } = {}) {
     const tolerance = Math.max(3, (page?.height ?? 600) * 0.005);
     const above = items.filter((i) => i.y > marksY + tolerance && !NOISE_RE.test(i.str));
     const lines = toLines(above, tolerance);
+    // The total: the bare number nearest above the marks row.
+    const totalItem = items
+      .filter((i) => i.y > marksY + tolerance && /^\d+(?:\.\d+)?\s*%?$/.test(i.str))
+      .sort((a, b) => a.y - b.y)[0];
+    if (totalItem) {
+      const value = Number.parseFloat(totalItem.str);
+      if (value >= 0 && value <= 100) total = value;
+    }
     if (lines.length < 2) {
       errors.push({
         code: 'layout_not_recognised',
@@ -317,6 +354,7 @@ export function parseCertificateText(rawItems, { page } = {}) {
     course,
     assignment: marks.assignment,
     exam: marks.exam,
+    total,
     ...(rollNo ? { rollNo } : {}),
     errors,
   };

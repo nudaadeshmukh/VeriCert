@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "db:indexes": "node --env-file=.env scripts/db-indexes.mjs"
+    "db:indexes": "node --env-file=.env scripts/db-indexes.mjs",
+    "smoke:nptel": "node --env-file=.env scripts/smoke-nptel.mjs"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",
@@ -28,6 +29,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tesseract.js": "7.0.0",
+    "unpdf": "2.1.0",
     "zxing-wasm": "3.1.6"
   },
   "devDependencies": {

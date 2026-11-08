@@ -135,7 +135,7 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false } = 
 
     // QR code (both URL shapes).
     const q = performance.now();
-    const qr = await decodeQr(canvas);
+    const qr = await decodeQr(canvas, { trace: debug ? (out.qrTrace = []) : undefined });
     out.timings.qrMs = round(performance.now() - q);
     if (qr.error) {
       out.errors.push({
