@@ -115,3 +115,79 @@ runtime dependencies; `node_modules` was partly populated.
 **Fix:** re-ran the devDependencies install on its own in the background (exit 0); verified every
 version in `package.json` is exact (no `^` or `~`).
 **Guard:** none needed; `npm ci` in CI fails if the lockfile and `package.json` disagree.
+
+## C-009 — pdf.js 6: `doc.destroy()` does not exist, and a throwing `finally` discarded a good result
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** the first browser run of `extractCertificate` on the genuine 2026 PDF returned only
+`pdf_unreadable` ("TypeError: doc.destroy is not a function") although the PDF had loaded and
+parsed fine. Node unit tests of `parse.js` could not see it.
+**Root cause:** in pdf.js 6.x the loading task owns `destroy()`; `PDFDocumentProxy` has no such method.
+The call sat in a `finally`, and an exception thrown from `finally` replaces the `return`.
+**Fix:** `src/lib/extract/pdf.js` now calls `task.destroy()`.
+**Guard:** `e2e/extract.spec.js` runs the real PDF in Chromium (this is the "real browser" rule
+doing its job again).
+
+## C-010 — OCR of the whole marks row drops the "." and "/" ("22.5/25" read as "22525")
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** with the planned digits-and-slash whitelist on a crop of the marks row,
+`NPTEL.png` gave `04 / 0 / 4745` (the big "84" and "4745", but not the cells), and a
+tighter row crop gave `22525` / `225125` for the first cell, at 2x and 3x, PSM 6/7/11.
+**Root cause:** by measurement (a grid of crop, scale, PSM and whitelist, run in Node with the
+same tesseract.js and language data): the cell text is small and sits against vertical borders;
+only the "61.88/75" cell survived whole-row crops. Reading each cell on its own with PSM 7
+returned `22.5/25`, `61.88/75`, `20/25`, `70/75` exactly (3-4x upscale, threshold 140 or none).
+**Fix:** `src/lib/extract/image.js` `findTableBorders()` locates the table's five vertical
+borders from the pixels (equal-height dark runs); `ocr.js` `readMarksTable()` reads the two value
+cells separately. If the table cannot be found the marks are "not confirmed".
+**Guard:** e2e tests on `NPTEL.png` and `NPTEL_tampered.png` (exact values); a mark is accepted
+only when two different scale/threshold passes agree (tesseract's own confidence was 0–30 on the
+correct reads of the edited cells, so it cannot be the gate).
+
+## C-011 — Roll number OCR: the letter S read as the digit 5 at 3x and 4x
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** A roll number of the form `NPTEL25MG18S<9 digits>` was read as `NPTEL25MG185<9 digits>` (the real
+value is only in the gitignored sample).
+**Root cause:** measured: exact at 2x, wrong at 3x and 4x, on the same crop. S/5 is a known OCR
+confusion and cannot be corrected without guessing (the plan's S→5 slip tolerance is for marks).
+**Fix:** the roll is optional; it is read at 2x from two different crops and accepted only if
+both give the same string that also matches the strict roll pattern.
+**Guard:** e2e on the PNG samples. Result: read for `NPTEL.png` and its tampered copy, not for
+the two PDF renders turned into PNGs (no error is raised; see progress.md known issues).
+
+## C-012 — A no-QR page ran the full QR search: 38 of 50 attempts in the 6 s budget
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** the synthetic PDFs (no QR code) took about 6.3 s to report `qr_not_found`; the
+full search would take about 8 s.
+**Root cause:** the search is 2 full-page decodes plus 4 regions x 2 scales x 3 filters x 2
+decoders, about 160 ms each. Successful decodes took 0.1–0.35 s.
+**Fix:** dropped the grey-110 filter (no measured sample needed it) and capped the search at 4 s
+(`QR_BUDGET_MS` in `src/lib/extract/qr.js`).
+**Guard:** e2e asserts the specific `qr_not_found` code; measured duration is in progress.md.
+
+## C-013 — My own test harness hung on a corrupt PDF (not the engine)
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** the corrupt-PDF e2e test timed out waiting for "done". It looked like pdf.js hanging.
+**Root cause:** `extractCertificate` had returned `pdf_unreadable` correctly; the scratch page's
+extra `pdfChecks()` then called `readPdf` on the same corrupt file, threw, and left the status on
+"running". Found by checking where the status stopped, not by assuming the library.
+**Fix:** `app/dev/extract/ExtractScratch.js` catches errors from `pdfChecks`. The new PDF
+load/render timeouts in `pdf.js` were added while chasing this; no sample has actually reproduced
+a pdf.js hang, so those timeouts are unproven guards.
+**Guard:** the corrupt-PDF e2e test (now 1.5 s).
+
+## C-014 — Two unexplained timing events (not reproduced); stray tesseract cache file
+**Phase:** 2 · **Date:** 2026-11-06
+**Symptom:** (a) a measurement script waited 120 s for a page to finish and failed; on rerun, the
+same samples all completed (6 files in one page took about 6 s each time). (b) In the first run
+after changing the marks logic, one of 19 image extractions (`t-q85.jpg`) returned `ocr_timeout`
+after the 8 s budget; 3 solo reruns (about 1.7 s each) and a full 6-image rerun were all fine.
+(c) The first full Playwright run on a cold `next dev` failed 2 of 15 tests (30 s timeouts on the
+first hit of a route); the next run passed 15/15 in 38.8 s.
+**Root cause:** not found. All three happened right after file edits or a cold dev-server start;
+the project folder is inside OneDrive, which may slow `.next`/`node_modules` I/O. Unverified.
+**Fix:** Playwright's per-test timeout raised to 60 s (`playwright.config.js`). The OCR budget is
+wall-clock by design, so a stalled machine fails closed with "not confirmed (timeout)" instead of
+returning anything wrong.
+**Guard:** none for the cause. Watch for `ocr_timeout` in Phase 7's batch runs and in the Phase 10 pilot.
+**Also:** running tesseract.js in Node from the repo root wrote `eng.traineddata` there; deleted it
+and added `*.traineddata` to `.gitignore`.

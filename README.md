@@ -4,8 +4,8 @@ PICT · NPTEL certificate verification. Staff upload a folder of NPTEL certifica
 each one, checks it against NPTEL's own verification source, runs tampering checks, and lets the
 user export a CSV. Only verified `@pict.edu` accounts can use it.
 
-> **Status: Phase 1 of 10 (project foundation).** The site is an empty shell with a database
-> connection. Sign-in and verification are not built yet. See `docs/progress.md` for the current
+> **Status: Phase 2 of 10 (certificate extraction engine).** The browser can read a certificate
+> (PDF, JPG or PNG); there is no sign-in, upload page or server-side verification yet. See `docs/progress.md` for the current
 > state, `docs/implementation_plan.md` for the plan, and `CLAUDE.md` for the rules.
 
 Uploaded certificate files never leave the browser. Only the verification URL, the extracted
@@ -27,6 +27,10 @@ cp .env.example .env     # then fill in the values below
 npm run db:indexes       # creates the MongoDB indexes (safe to re-run)
 npm run dev              # http://localhost:3000
 ```
+
+`npm run dev` and `npm run build` first copy the pdf.js, zxing-wasm and tesseract.js workers, wasm and
+language data into `public/vendor/` (gitignored, about 19 MB) so certificate processing makes no
+third-party requests. For the browser tests run `npx playwright install chromium` once.
 
 Check the database connection: `curl http://localhost:3000/api/health` should return
 `{"ok":true,"db":"up","version":"…"}`. If the database is unreachable or a variable is missing it
@@ -59,15 +63,19 @@ in Vercel for Preview and Production.
 | `npm run build`      | Production build (must pass before a phase is complete)              |
 | `npm run db:indexes` | Create/update all MongoDB indexes, including TTL changes             |
 
-First time only: `npx playwright install chromium`.
+First time only: `npx playwright install chromium`. The real-sample e2e tests read `samples/` and
+`samples/expected.local.json` (both gitignored, never committed) and are skipped when absent.
 
 ## Layout
 
 ```
 app/                 Next.js routes (pages and api/)
 src/lib/db/          client.js (cached MongoClient), indexes.js
+src/lib/extract/     browser extraction engine: index.js (extractCertificate), pdf.js, qr.js,
+                     ocr.js, image.js, vendor.js, and parse.js (pure; shared with the server later)
 src/lib/version.js   build version shown by /api/health
-scripts/             one-off Node scripts (db-indexes.mjs)
+app/dev/extract/     dev-only scratch page for the browser tests (404 in production)
+scripts/             db-indexes.mjs, copy-vendor.mjs
 tests/unit/          Vitest · tests/fixtures/ anonymised data (see its README)
 e2e/                 Playwright
 docs/                progress.md, challenges-log.md, implementation_plan.md
