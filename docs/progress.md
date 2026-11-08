@@ -25,18 +25,18 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 
 | | |
 |---|---|
-| **Current phase** | Phase 1 complete, awaiting user review. |
-| **Next phase** | Phase 2: Certificate extraction engine (not started; waits for approval) |
-| **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`) |
+| **Current phase** | Phase 2 complete, awaiting user review. |
+| **Next phase** | Phase 3: Verification service and comparison (not started; waits for approval) |
+| **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`). Still running Phase 1 code (`0.1.0+107e806`); Phase 2 is not deployed |
 | **Preview URL** | None. No Preview deployment exists (see Phase 1 deviation). |
-| **Does it run?** | Yes: an empty shell (placeholder page + `/api/health`) with a live Atlas connection, locally and on Vercel. No sign-in, no verification yet. |
-| **Latest measured results** | Production `/api/health`: 200 ×5, `db:"up"`, version `0.1.0+107e806`; 0.49–0.52 s warm, 2.47 s first call. From the dev machine. NPTEL verification page fetch: 0/20 retries, median 135 ms (shape A), 77 ms (shape B), dev machine only (Phase 0). |
+| **Does it run?** | Locally: yes. `extractCertificate(file)` reads PDF, PNG and JPG in Chromium (dev scratch page `/dev/extract`). On Vercel: only the Phase 1 shell. No sign-in, upload page or verification yet. |
+| **Latest measured results** | Extraction in Chromium (dev server, this machine), median: 2026 PDF 624 ms warm / 741 ms cold; `NPTEL.png` 1,101 / 1,858 ms; tampered PNG 1,022 / 1,763 ms. All 3 real samples extract to the NOTES.md values. Not measured from Vercel or on a slower device. NPTEL page fetch (Phase 0): 0 of 20 retries, median 135 / 77 ms. |
 
 | Phase | Status |
 |---|---|
 | 0 — Specification check and samples | ✅ complete (gate passed from a local script) |
 | 1 — Project foundation | ✅ complete (verified on Production, not Preview) |
-| 2 — Certificate extraction engine | ⏳ not started |
+| 2 — Certificate extraction engine | ✅ complete (verified in local Chromium; not deployed) |
 | 3 — Verification service and comparison | ⏳ not started |
 | 4 — Tampering checks | ⏳ not started |
 | 5 — Authentication | ⏳ not started |
@@ -261,6 +261,138 @@ Phases 2–4 and were not touched (rule 8).
 | 9 | The local `.env` has two extra variables (`MONGODB_USERNAME`, `MONGODB_PASSWORD`) and a quoted `MONGODB_URI`. Nothing reads the extras. In Vercel the URI was entered without quotes | Low | None |
 | 10 | The e2e suite runs locally only; CI does not run Playwright (plan: lint, unit tests, build) | Low | None |
 | 11 | The `db:indexes` script ran against the same Atlas database that Production uses (there is one `vericert` database; no separate dev database) | Medium | Phase 6 tests need a separate test database |
+
+---
+
+## Phase 2 — Certificate extraction engine (browser)
+
+**Status:** complete. Both real samples, the tampered screenshot and six JPEG re-encodes extract
+correctly in a real browser (Chromium), or fail closed with a specific reason. Not deployed.
+
+**Branch:** work was done on `temp` (rule 14, added at the start of this phase).
+
+**Completed features** (`src/lib/extract/`):
+- `parse.js`: pure, no imports or browser APIs (a test enforces it), so Phase 3's server code can reuse
+  it. `parseMarks()` anchors on `n/25` and `n/75`; strict for the text layer, `tolerant` for OCR
+  (O→0, l/I/|→1, S→5, `2S`/`7S` denominators, spaces around `/`, comma decimals; a token with no
+  real digit is noise). Ranges 0–25 and 0–75: out of range is an error, not clamped. Two different
+  values for one field is `ambiguous_marks`. `parseCertificateText()` finds the name and course by
+  position above the marks row (not item order: the 2025 and 2026 PDFs order items differently),
+  joins wrapped course lines, ignores the bare total (`91%`, `84`). `normalizeText()` = NFC,
+  whitespace collapse, keeps ZWJ/ZWNJ. `isPlausibleName()` allows letters plus combining marks
+  (Devanagari) and rejects `7` and `|||`; `findRollNo()`; `parseVerifyUrl()` accepts only https on
+  `nptel.ac.in` or `*.nptel.ac.in` (hostname, so look-alikes and `user@` tricks fail), both shapes
+  (`/verify/<ID>`, `/noc/E_Certificate/<ID>`), `:443` allowed.
+- `pdf.js`: `readPdf()` hands pdf.js a COPY (`bytes.slice()`) and keeps the original `bytes` whole;
+  renders page 1 at 3x capped at 3,200 px on the longest side (the 2025 PDF is already 2,552 pt wide,
+  3x would be 168 MB of pixels); reads the text layer; wasm and fonts self-hosted; load and render
+  timeouts (10 s / 15 s, unproven: no sample ever hung pdf.js).
+- `qr.js`: `decodeQr()`: jsQR on the full page, then zxing-wasm, then crops (bottom strip, bottom-right,
+  bottom-left, whole page) at 2x and 3x with greyscale thresholds 140 and Otsu, each with both
+  decoders. A decoded payload only counts if `parseVerifyUrl` accepts it; otherwise the specific reason
+  (`qr_not_url`, `qr_unsupported_scheme`, `qr_not_nptel`, `qr_unknown_shape`, `qr_not_found`) is kept.
+  4 s search budget.
+- `ocr.js`: tesseract.js worker created on first use only, cached, single job queue. Crops only, never
+  a full page. 8 s per-certificate budget including worker start-up; exceeding it gives
+  `ocr_timeout` / "not confirmed (timeout)", fields null, worker recreated for the next job.
+  Name and course: OCR of one identity crop, located by the certificate's printed boilerplate
+  ("awarded to", "successfully completing the course", "consolidated score"); no anchor, no value.
+  Marks: `findTableBorders()` (`image.js`) finds the table's five equal-height vertical borders in
+  the pixels, then each value cell is OCR'd alone (PSM 7, digits `/ .`) in 8 passes (scales 2 to 5,
+  threshold 140 or none); accepted only if at least two well-formed readings agree and none
+  disagrees. Roll number: optional, two crops at 2x must agree and match the strict pattern; no error if not.
+- `index.js`: `extractCertificate(file, { ocrBudgetMs, debug })` returns `{ name, course, assignment,
+  exam, verifyUrl, certificateId, rollNo?, source: "text_layer"|"ocr", qr, ocrConfidence?, timings,
+  errors[] }`. Never throws. Sniffs the type from the first bytes. PDF: OCR only for fields the text
+  layer could not give (not for out-of-range or ambiguous values). Images: always `source: "ocr"`.
+- `image.js`, `vendor.js`: canvas helpers; absolute URLs of the self-hosted assets.
+- `scripts/copy-vendor.mjs` (run by `predev` and `prebuild`): copies the pdf.js worker, wasm and fonts,
+  zxing's wasm, and tesseract's worker, 3 LSTM core variants and English data into `public/vendor/`
+  (gitignored; 19 MB: pdfjs 3.4, tesseract 15, zxing 0.9). No third-party CDN is contacted (the e2e
+  tests assert no non-localhost request while reading a certificate).
+- `app/dev/extract/` (page + `ExtractScratch.js`): dev-only scratch page, 404 when `NODE_ENV` is
+  production (verified against `next start`). `?budget=<ms>` sets the OCR budget. For PDFs it also
+  reports the detached-buffer checks. `debug` shows raw OCR text and is only used on this page.
+
+**Files modified:** `CLAUDE.md` (rule 14), `.gitignore` (`public/vendor/`, `*.traineddata`),
+`package.json` (`predev`, `prebuild`), `playwright.config.js` (60 s timeout), `README.md`,
+`docs/challenges-log.md` (C-009 to C-014).
+
+**Dependencies added (exact versions):**
+- pdfjs-dist@6.5.438, jsqr@1.4.0, zxing-wasm@3.1.6, tesseract.js@7.0.0 (pulls tesseract.js-core@7.0.0),
+  @tesseract.js-data/eng@1.0.0 (English `4.0.0_best_int` data)
+- Chromium Headless Shell 158.0.8127.18 (unchanged); Node v24.18.1.
+
+**Tests:**
+- Vitest: 96 passed in 5 files (was 23 in 3): `parse.test.js` 70 (every Phase 0 text fixture including both
+  genuine layouts, decimal, long name and course, Devanagari, decomposed nukta, zero, out-of-range,
+  OCR slips strict vs tolerant, wrapped course, junk names, URL allowlist look-alikes, purity),
+  `sniff.test.js` 3.
+- Playwright: 16 passed in 43.2 s (was 4): 12 new in `e2e/extract.spec.js`: 3 real samples with exact
+  values, tampered vs genuine PNG, OCR timeout then recovery, JPEG re-encodes at quality 92 and 75,
+  detached-buffer control, and 5 on committed or generated inputs (synthetic PDF without a QR,
+  tampered-metadata PDF, non-image file, corrupt PDF, blank image). The real-sample tests read the
+  gitignored `samples/` and `samples/expected.local.json` and skip if absent; nothing real is committed.
+- Lint: clean. Build: passes with `MONGODB_URI` and `MONGODB_DB` empty. `npm audit --omit=dev`: 0.
+- Production check (`next build` + `next start`): `/dev/extract` returns 404; every `/vendor/` asset
+  is served with the right type (`application/wasm`, `application/javascript`, `application/gzip`).
+
+**Known facts from CLAUDE.md, status after Phase 2:**
+| # | Fact | Status |
+|---|---|---|
+| 4 | QR ~55 px needs upscaling | **Confirmed again.** `NPTEL.png`: jsQR on the raw full image failed, zxing-wasm on the full image decoded it (attempt 2). The PNG render of the 2025 PDF needed jsQR on the bottom strip at 2x, grey 140. The 2026 PDF decoded with jsQR on the full 3x render |
+| 7 | pdf.js detaches the ArrayBuffer | **Confirmed** in Chromium: handing pdf.js the original buffer leaves `byteLength` 0 (was the full file size); `readPdf`'s copy keeps the full size and starts `%PDF-` |
+| 8 | OCR misreads names ("7") | **Not reproduced**: the name was read correctly on every image run (OCR confidence 92 to 93). Other misreads were real: C-010 (marks dropped `.` and `/`) and C-011 (roll S read as 5) |
+| 9 | Devanagari combining marks | Confirmed at parse level (fixtures). **OCR is English-only**: a Devanagari name on an image would come back "not confirmed". Untested on a real Devanagari certificate |
+| 10 | Full-page OCR ~30 s | **Not tested**: by design nothing OCRs a full page |
+
+**Measured results** (Chromium 158 headless, `next dev`, this machine; `totalMs` is `extractCertificate` only,
+not page load; cold = new browser context each time, n = 3; warm = same page with workers running, n = 5;
+min / median / max):
+| Sample | Source | Cold ms | Warm ms | Warm breakdown (ms) |
+|---|---|---|---|---|
+| `NPTEL Entrepreneurship and IP Strategies.pdf` (2026) | text layer | 737 / 741 / 745 | 605 / 624 / 641 | load 135, render 130, parse 0, QR 336 |
+| `NPTEL.png` (2025 screenshot) | OCR | 1,845 / 1,858 / 1,869 | 1,071 / 1,101 / 1,129 | QR 196, OCR 891 (identity 325, marks 391, roll 175) |
+| `NPTEL_tampered.png` | OCR | 1,761 / 1,763 / 1,790 | 1,003 / 1,022 / 1,065 | QR 192, OCR 817 |
+| 2026 PDF rendered to a 1054 px PNG (local only) | OCR | 1,603 / 1,629 / 1,656 | 977 / 988 / 1,001 | QR 76, OCR 903 |
+| 2025 PDF rendered to a 1054 px PNG (local only) | OCR | 1,967 / 1,970 / 1,979 | 1,182 / 1,193 / 1,233 | QR 249, OCR 933 |
+| Page with no QR (synthetic PDF) | text layer | n/a | total 4,601, 5,023, 4,911 ms (3 runs; QR search cut off by its 4 s budget after 18 to 24 attempts) | |
+
+OCR worker start, first image after load: about 0.5 s (`ocr_workerMs` 503 to 537 in three runs).
+
+Accuracy, counts only (small samples, not an accuracy rate):
+- 3 of 3 real samples exact on every field and on `source`.
+- 2 of 2 PDF-to-PNG renders exact except the roll number (not read; it is optional).
+- 6 JPEG re-encodes of the two PNGs (quality 95, 85, 75): 4 of 6 exact before the final marks rule. With
+  the final rule: first run 5 exact and 1 `ocr_timeout`; two reruns 6 of 6 exact (see C-014).
+- In the first 19 image runs after the final rule: 1 timeout and 0 wrong values. Every failure so far
+  gave null plus a specific code, never a wrong value.
+- Roll number from OCR: read on 7 of 8 images derived from the two real PNGs in the first run (the
+  eighth timed out) and on 8 of 8 in the rerun; 0 of 2 PDF renders.
+
+**Changes to earlier phases:** `CLAUDE.md` gained rule 14 (work only on `temp`; the user merges via PR) at
+the start of this phase. Phase 0 and Phase 1 entries are unchanged.
+
+**Remaining work:** Phase 3 (verification service and comparison). Phase 4 will need the raw PDF bytes
+that `readPdf()` already returns, and `ocrConfidence`, `source` and `rollNo` from this phase.
+
+**Known issues / TODOs:**
+| # | Item | Priority | Blocking |
+|---|---|---|---|
+| 1 | No real JPG sample. The JPEG path is tested only on JPEG re-encodes of the PNG samples (lossy, from a screenshot). Photos of printed certificates are not supported: the OCR layout logic needs the flat layout and the table borders | Medium | Phase 10 pilot |
+| 2 | OCR name/course rely on printed boilerplate phrases and the marks table on its five vertical borders. Tuned on the 2025 template; it also worked on the 2026 template rendered to PNG. Any other NPTEL layout fails closed with a specific code; not seen yet | Medium | Phase 10 pilot |
+| 3 | The marks passes (scales, thresholds, "two must agree, none may disagree") were chosen on 3 real images and 6 JPEG copies of them: small-sample tuning (rule 7 in spirit). More samples needed | High | Phase 4 |
+| 4 | OCR roll number is optional and no error is raised when absent. Phase 4's `id_match` cannot depend on it for images | Low | Phase 4 |
+| 5 | English-only OCR; Devanagari names on images come back "not confirmed" | Low | None |
+| 6 | One unexplained `ocr_timeout` in 19 runs and two harness timeouts on a cold dev server (C-014). OneDrive suspected, unverified | Medium | Phase 7 batch runs |
+| 7 | A certificate with no readable QR spends 4 s in the QR search before failing; adds up in a bulk run | Low | Phase 7 |
+| 8 | `extractCertificate` runs on the main thread (canvas, jsQR, zxing; OCR in a worker). Phase 7's 3 to 4 parallel certificates is not designed or measured. The OCR worker is a single queue | Medium | Phase 7 |
+| 9 | Multi-page PDFs: only page 1 is read, with no warning | Low | None |
+| 10 | A QR on plain `http://nptel.ac.in/...` is rejected (`qr_unsupported_scheme`) instead of upgraded. None observed. Rule 11: ask before changing | Low | None |
+| 11 | `public/vendor/` is regenerated by `predev`/`prebuild`; it adds 19 MB of static assets to each deploy and has not been deployed yet. Phase 8's CSP must allow these workers, wasm, and `blob:` workers for tesseract | Medium | Phase 8 |
+| 12 | The e2e tests need the gitignored `samples/` and `expected.local.json`; CI does not run Playwright | Low | None |
+| 13 | The scratch page ships in the production bundle (always 404 at runtime). It can be moved out of `app/` or removed if preferred | Low | None |
+| 14 | pdf.js load/render timeouts (10 s, 15 s) are untested guards | Low | None |
 
 ---
 

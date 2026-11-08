@@ -81,6 +81,10 @@ Pin every dependency to an exact version. Record the versions in `docs/progress.
     `gh`/API calls that write to GitHub). The user makes all commits and pushes. Read-only
     git commands (`status`, `diff`, `log`, `ls-remote`) are fine. Instead, suggest a commit message at the
     end of each phase.
+14. **Work only on the `temp` branch.** The user merges to `main` through a pull request
+    after approving a phase. At the start of every session, and before starting any work, run
+    `git branch --show-current`. If it is not `temp`, stop and tell the user. Never switch,
+    create or delete branches yourself.
 
 ## Result semantics
 - **Verification:** `Successful` when both marks equal the verification source (tolerance

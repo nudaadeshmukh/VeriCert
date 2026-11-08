@@ -6,6 +6,8 @@ const port = 3000;
 export default defineConfig({
   testDir: 'e2e',
   outputDir: 'test-results',
+  // The first hit of a route on a cold `next dev` compiles it (pdf.js, tesseract), which once took >30 s.
+  timeout: 60_000,
   reporter: [['list']],
   use: { baseURL: process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${port}`, trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
