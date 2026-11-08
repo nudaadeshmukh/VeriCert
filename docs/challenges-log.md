@@ -221,3 +221,16 @@ search still took 4.1 to 4.7 s (3 runs) because jsQR's cost is mostly its pixel-
 the inversion. **Reverted**: no measurable gain. Dropping jsQR on crops would lose measured successes
 (jsQR on the bottom strip found 2 of my 8 test images where zxing did not), and shrinking the search or
 the 4 s budget has no data behind it. **Left as a Known Issue** with this profile.
+
+## C-016 — "LF will be replaced by CRLF" warnings on Windows
+**Phase:** 3 · **Date:** 2026-11-08
+**Symptom:** Git printed "LF will be replaced by CRLF the next time Git touches it" for most files on every
+`git add`. `core.autocrlf` is `true` on this machine and `.gitattributes` only had `* text=auto`. Four working-tree
+files (`ExtractScratch.js`, `extract.spec.js`, `playwright.config.js`, `pdf.js`) were actually CRLF; the index had
+LF everywhere (`git ls-files --eol`: 82 `i/lf`, 1 `i/none`, 0 CRLF).
+**Root cause:** `text=auto` leaves line endings to each machine's `core.autocrlf`, and Prettier's `endOfLine: "auto"`
+keeps whatever a file already has, so Windows checkouts and tools wrote a mix.
+**Fix:** `.gitattributes` is now `* text=auto eol=lf` (binary rules unchanged), which overrides `core.autocrlf` for
+every text file, and `.prettierrc.json` has `endOfLine: "lf"`. `prettier --write` brought the four CRLF files to LF.
+No `git add --renormalize .` is needed: the index already holds LF everywhere, so it would change nothing.
+**Guard:** `npm run lint` (Prettier check) now fails on CRLF in any Prettier-covered file.
