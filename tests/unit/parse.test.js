@@ -3,6 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   findRollNo,
+  isAllowedNptelUrl,
+  isNptelHostname,
   isPlausibleCourse,
   isPlausibleName,
   normalizeText,
@@ -30,6 +32,7 @@ describe('parseCertificateText: genuine layouts (observed values from NOTES.md)'
       course: 'ENTREPRENEURSHIP AND IP STRATEGY',
       assignment: 25,
       exam: 66,
+      total: 91,
       rollNo: 'NPTEL26HS164S000000001',
       errors: [],
     });
@@ -43,6 +46,7 @@ describe('parseCertificateText: genuine layouts (observed values from NOTES.md)'
       course: 'Design Thinking - A Primer',
       assignment: 22.5,
       exam: 61.88,
+      total: 84,
       rollNo: 'NPTEL25MG18S000000001',
       errors: [],
     });
@@ -330,5 +334,58 @@ describe('purity', () => {
     const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/lib/extract/parse.js'), 'utf8');
     expect(src).not.toMatch(/^\s*import\s/m);
     expect(src).not.toMatch(/\b(window|document|navigator|OffscreenCanvas|Worker)\b\s*[.[(]/);
+  });
+});
+
+describe('total (informational)', () => {
+  it('is the bare number nearest above the marks row, with or without a percent sign', () => {
+    const items = (total) => [
+      { str: 'RAHUL ANIL PATIL', y: 400 },
+      { str: 'EFFECTIVE WRITING', y: 340 },
+      { str: total, y: 295 },
+      { str: '1910', y: 229 }, // candidates certified: below the marks row, never the total
+      { str: '18/25', y: 262 },
+      { str: '52/75', y: 262 },
+    ];
+    expect(parseCertificateText(items('70%')).total).toBe(70);
+    expect(parseCertificateText(items('70')).total).toBe(70);
+    expect(parseCertificateText(items('70.5 %')).total).toBe(70.5);
+  });
+  it('is null (and not an error) when absent or out of range', () => {
+    const base = [
+      { str: 'RAHUL ANIL PATIL', y: 400 },
+      { str: 'EFFECTIVE WRITING', y: 340 },
+      { str: '18/25', y: 262 },
+      { str: '52/75', y: 262 },
+    ];
+    const r = parseCertificateText(base);
+    expect(r.total).toBeNull();
+    expect(r.errors).toEqual([]);
+    expect(parseCertificateText([...base, { str: '250%', y: 295 }]).total).toBeNull();
+  });
+});
+
+describe('isAllowedNptelUrl / isNptelHostname (the one allowlist used by the server fetcher)', () => {
+  const ok = (u) => isAllowedNptelUrl(new URL(u));
+  it('allows https on nptel.ac.in and its subdomains, with or without :443', () => {
+    expect(ok('https://nptel.ac.in/verify/X')).toBe(true);
+    expect(ok('https://beta.nptel.ac.in:443/verify/X')).toBe(true);
+    expect(ok('https://archive.nptel.ac.in/content/x.pdf')).toBe(true);
+  });
+  it.each([
+    'http://nptel.ac.in/x',
+    'https://nptel.ac.in.evil.com/x',
+    'https://evilnptel.ac.in/x',
+    'https://nptel.ac.in@evil.com/x',
+    'https://user:pw@nptel.ac.in/x',
+    'https://nptel.ac.in:8443/x',
+    'https://nptel.ac.in./x',
+    'https://169.254.169.254/latest/meta-data',
+    'https://localhost/x',
+    'ftp://nptel.ac.in/x',
+  ])('refuses %s', (u) => expect(ok(u)).toBe(false));
+  it('compares case-insensitively on the hostname', () => {
+    expect(isNptelHostname('ARCHIVE.NPTEL.AC.IN')).toBe(true);
+    expect(isNptelHostname('xnptel.ac.in')).toBe(false);
   });
 });

@@ -25,19 +25,19 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 
 | | |
 |---|---|
-| **Current phase** | Phase 2 complete, awaiting user review. |
-| **Next phase** | Phase 3: Verification service and comparison (not started; waits for approval) |
+| **Current phase** | Phase 3 built and verified locally; **gate pending** (live smoke from a Vercel Preview). |
+| **Next phase** | Phase 4: Tampering checks (not started; waits for the Phase 3 gate and approval) |
 | **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`). Still running Phase 1 code (`0.1.0+107e806`); Phase 2 is not deployed |
 | **Preview URL** | None. No Preview deployment exists (see Phase 1 deviation). |
-| **Does it run?** | Locally: yes. `extractCertificate(file)` reads PDF, PNG and JPG in Chromium (dev scratch page `/dev/extract`). On Vercel: only the Phase 1 shell. No sign-in, upload page or verification yet. |
-| **Latest measured results** | Extraction in Chromium (dev server, this machine), median: 2026 PDF 624 ms warm / 741 ms cold; `NPTEL.png` 1,101 / 1,858 ms; tampered PNG 1,022 / 1,763 ms. All 3 real samples extract to the NOTES.md values. Not measured from Vercel or on a slower device. NPTEL page fetch (Phase 0): 0 of 20 retries, median 135 / 77 ms. |
+| **Does it run?** | Locally: yes. The browser reads PDF, PNG and JPG (`/dev/extract`); `POST /api/verify` fetches NPTEL values (dev only). On Vercel: Production runs only the Phase 1 shell; the Phase 3 code is not deployed to Production. No sign-in or upload page yet. |
+| **Latest measured results** | Live verification from this machine, both URL shapes, 6 of 6 exact: p50 587 ms, max 2,944 ms (n = 6). **Not yet measured from Vercel (gate).** Extraction in Chromium (Phase 2): 2026 PDF 624 ms warm, `NPTEL.png` 1,101 ms warm (medians). |
 
 | Phase | Status |
 |---|---|
 | 0 — Specification check and samples | ✅ complete (gate passed from a local script) |
 | 1 — Project foundation | ✅ complete (verified on Production, not Preview) |
 | 2 — Certificate extraction engine | ✅ complete (verified in local Chromium; not deployed) |
-| 3 — Verification service and comparison | ⏳ not started |
+| 3 — Verification service and comparison | 🔄 built and tested locally; gate (Vercel Preview smoke test) pending |
 | 4 — Tampering checks | ⏳ not started |
 | 5 — Authentication | ⏳ not started |
 | 6 — Persistence and history | ⏳ not started |
@@ -393,6 +393,164 @@ that `readPdf()` already returns, and `ocrConfidence`, `source` and `rollNo` fro
 | 12 | The e2e tests need the gitignored `samples/` and `expected.local.json`; CI does not run Playwright | Low | None |
 | 13 | The scratch page ships in the production bundle (always 404 at runtime). It can be moved out of `app/` or removed if preferred | Low | None |
 | 14 | pdf.js load/render timeouts (10 s, 15 s) are untested guards | Low | None |
+
+---
+
+## Phase 3 — Verification service (server) and comparison
+
+**Status:** PARTIAL, gate pending. Everything is built and verified locally, including live against NPTEL
+from this machine and through a production build. **The Phase 3 gate, the live smoke test against a Vercel
+Preview deployment, has NOT been run yet.** It needs `VERIFY_DEV_ENDPOINT=1` on Vercel Preview and a
+redeploy by the user. Until it passes, this phase is not complete. This entry is to be finished with the
+Vercel numbers (p50, max, function region) when the gate runs.
+
+**Branch:** `temp` (rule 14).
+
+**Completed features:**
+- `src/lib/verify/fetchSource.js`: `fetchNptel()`. Allowlist (`isAllowedNptelUrl`: https, port 443 only,
+  no credentials, hostname `nptel.ac.in` or `*.nptel.ac.in`) checked on the first URL and again on EVERY
+  redirect hop; redirects followed by hand (`redirect: "manual"`), at most 5; relative `Location` resolved;
+  browser headers only (User-Agent, Accept, Accept-Language, nothing else); one retry on a 5xx, a network
+  error or an attempt timeout; 8 s per attempt and 20 s overall (`LIMITS`); response bodies capped while
+  streaming (256 KB for HTML, 8 MB for PDFs). 404/410 is `source_not_found`, other 4xx is
+  `source_http_error` (reported, never worked around), none of them retried.
+- `src/lib/verify/parseSource.js`: pure parsers. Shape A: the hidden `div.sr` block (name, course, total,
+  status) and the `certificate.pdf` link. Shape B: wrapper iframe, then the archive landing page's relative PDF
+  link. Every link must be allowlisted, match the expected path pattern, and **carry the same certificate ID as
+  the QR code** (`source_mismatch` otherwise), so a swapped link cannot substitute another person's PDF.
+  Anything missing is `source_format_changed`, never a guess.
+- `src/lib/verify/readPdf.js`: text layer of NPTEL's PDF on the server with `unpdf` (positioned items).
+- `src/lib/verify/index.js`: `verifySource(url, { cache })`. Chain for shape A: page, then PDF. Shape B:
+  wrapper, archive (302), landing, PDF. The PDF text goes through **`parseCertificateText` from
+  `src/lib/extract/parse.js`**, the same function that reads an uploaded certificate (no second parser). Returns
+  `{ source: { name, course, assignment, exam, total } | null, error?, message?, meta: { shape, ms, requests } }`.
+  The PDF is never returned. Error codes: `invalid_url`, `url_not_allowed`, `unsupported_url_shape`,
+  `source_unreachable`, `source_timeout`, `source_not_found`, `source_http_error`, `too_many_redirects`,
+  `bad_redirect`, `source_too_large`, `source_format_changed`, `source_mismatch`, `source_not_live`,
+  `source_unreadable` (no text layer or unopenable PDF, no server OCR in v1), `source_parse_failed` (marks not
+  read; the partial source is still returned), `internal_error`.
+- `src/lib/verify/dedupe.js`: `createDeduper()`, per-batch de-duplication (concurrent and repeated requests for
+  one URL share one result; a failed computation is forgotten). Deliberately NOT a process-wide cache, so one
+  user's results are never served to another user's request. The browser (Phase 7) creates one per run.
+- `src/lib/compare.js`: `compareCertificate(certificate, sourceResult)` returns `{ verification, reason, marks,
+  checks }`. Successful: both marks within 0.01 (22.5 vs 22.51 counts, 22.52 does not). **Unsuccessful: any mark
+  present on both sides differs** (even if the other is missing), **or the source status is not live** (reason
+  exactly `Certificate not live on NPTEL (status: <status>)`). **Error: only when nothing differs and a value is
+  missing**, with the reason (certificate mark unread, source unavailable or unparsed). Precedence: not live,
+  difference, missing, success (user decisions 1 and 2 of the Phase 3 review; `CLAUDE.md` Result semantics updated
+  to match). `name_match` and `course_match` are checks only (NFC, case-folded, punctuation as
+  spaces, Unicode-aware) and never change the verdict.
+- `app/api/verify/route.js`: `POST /api/verify { url }`. `runtime = nodejs`, `maxDuration = 30` (the
+  verification budget is 20 s; 30 s is inside Vercel Hobby's configurable maximum as I understand Vercel's
+  documented limits (60 s, or 300 s with Fluid compute); this is **to be confirmed by the real deployment**).
+  400 for bad bodies and request problems (`invalid_url`, `url_not_allowed`, `unsupported_url_shape`), 413 for
+  bodies over 2 KB, 405 for GET; a problem with NPTEL is HTTP 200 with an `error` code. `Cache-Control:
+  no-store`. Structured log with no URL, certificate ID or name.
+- `src/lib/verify/guard.js` + the route: **TEMPORARILY UNAUTHENTICATED.** `isVerifyEndpointEnabled()`: enabled
+  when `NODE_ENV !== "production"`; on Vercel Preview (which builds with `NODE_ENV=production`) only with
+  `VERIFY_DEV_ENDPOINT=1` AND `VERCEL_ENV=preview`; never on Production, even if the variable is set there by
+  mistake. Disabled means HTTP 404. **Phase 5 MUST: delete `guard.js` and the guard call in the route, add
+  `requireUser()`, remove `VERIFY_DEV_ENDPOINT` from Vercel and from `.env.example`, and delete the Phase 3
+  tests of the guard.**
+- `scripts/smoke-nptel.mjs` (`npm run smoke:nptel`): LIVE test, not in CI. Direct mode, or `--base-url=` to
+  POST to a deployment; sends `VERCEL_AUTOMATION_BYPASS_SECRET` as `x-vercel-protection-bypass` if set; reads the
+  real URLs and expected values from the gitignored `samples/smoke.expected.local.json`; prints labels, marks and
+  timings only (never names or URLs); reports p50 and max (nearest rank), the function region from
+  `x-vercel-id`, and detects a Deployment Protection redirect or a disabled endpoint.
+- `src/lib/extract/parse.js` (shared module, extended; Phase 2 behaviour unchanged): exported
+  `isNptelHostname` and `isAllowedNptelUrl` (the single allowlist, now used by `parseVerifyUrl` and the fetcher),
+  and `parseCertificateText` now also returns `total` (the bare number above the marks row, 0 to 100, null and
+  not an error when absent). Phase 2's own results do not use `total` yet.
+- Phase 2 side task (see C-015): `ocr_timeout` errors now carry the `stage`; `decodeQr` has an off-by-default
+  `trace`; one experiment tried and reverted.
+
+**Files modified:** `src/lib/extract/parse.js`, `src/lib/extract/ocr.js`, `src/lib/extract/qr.js`,
+`src/lib/extract/index.js`, `tests/unit/parse.test.js`, `tests/fixtures/generate-synthetic.mjs`,
+`package.json`, `package-lock.json`, `.env.example`, `README.md`, `CLAUDE.md` (Result semantics), `vercel.json` (new, region bom1), `docs/challenges-log.md` (C-015).
+New: `src/lib/verify/*`, `src/lib/compare.js`, `app/api/verify/route.js`, `scripts/smoke-nptel.mjs`,
+`e2e/verify.spec.js`, `tests/unit/{fetchSource,verify,compare,verifyRoute}.test.js`, `tests/unit/helpers/mockFetch.js`,
+`tests/fixtures/pdf/synthetic-source-2026.pdf`, `synthetic-source-2025.pdf`, `synthetic-no-text-layer.pdf`.
+
+**Dependencies added (exact versions):** unpdf@2.1.0. (pdfjs-dist@6.5.438 is unchanged; `unpdf` bundles its own
+serverless pdf.js build.)
+
+**Tests:**
+- Vitest: 245 passed in 10 files (was 96 in 5): `fetchSource` 36 (allowlist incl. look-alikes, link-local and
+  non-https, redirects to non-NPTEL hosts never requested, 5-hop limit, 500 then 200, 500 twice, 404, 403,
+  per-attempt and overall timeout, shared deadline, request headers, size caps), `verify` 35 (both URL shapes end
+  to end with mocked fetch and the real `unpdf`, `source_unreadable`, mismatch and swapped links, non-LIVE
+  status flowing through `compareCertificate`, corrupt PDF, de-duplication), `compare` 42 (precedence: not live,
+  difference beats missing, missing alone is Error), `verifyRoute` 19 (guard matrix, bodies, status codes, log has
+  no personal data), `smokeScript` 3 (the bypass secret only ever goes into the request header and never to
+  console output), `parse` 84 (was 70), others unchanged.
+- Playwright: 20 passed in 56.3 s (was 16): 4 new in `e2e/verify.spec.js` (refusals only, no NPTEL traffic).
+- Lint: clean. Build: passes with `MONGODB_URI` and `MONGODB_DB` empty.
+- Production-build checks (`next build` then `next start`): POST `/api/verify` returns 404 with no flags, 404 with
+  `VERIFY_DEV_ENDPOINT=1 VERCEL_ENV=production`, 400 (so reachable) with `VERIFY_DEV_ENDPOINT=1 VERCEL_ENV=preview`.
+  The live smoke through that production build passed (this proves `unpdf` works in the real bundle).
+
+**Live results so far (this machine, NOT Vercel):**
+| Run | Result |
+|---|---|
+| `npm run smoke:nptel`, direct, 3 runs per certificate, 2 s apart | 6 of 6 exact (name, course, marks, total) for shape A (2026 PDF) and shape B (2025 PNG) |
+| Same through `next dev` `/api/verify` | 6 of 6 exact |
+| Same through the production build (`next start`, simulated Preview) | 4 of 4 exact (2 runs each) |
+
+**Measured results** (this machine to NPTEL, Mumbai-area network unknown; NOT from Vercel):
+| Metric | Value | How measured |
+|---|---|---|
+| Whole verification, direct, shape A | 808, 410, 479 ms (2 fetch attempts) | 3 runs |
+| Whole verification, direct, shape B | 2,944, 587, 1,240 ms (3 fetch attempts) | 3 runs |
+| All direct runs together | p50 587 ms, max 2,944 ms | n = 6, nearest-rank p50 |
+| Through the production build | p50 909 ms, max 2,133 ms | n = 4 |
+| NPTEL first request needing the retry | 0 in all smoke runs (every verification used the minimum fetches: 2 for A, 3 for B) | from `meta.requests` |
+Phase 3's required p50 and max **from Vercel** are not measured yet (gate).
+
+**Phase 2 investigations (C-015):** OCR timeouts: not reproduced in about 120 further runs; cause not
+established; instrumentation added; left in Known Issues. No-QR search: profiled (jsQR on crops about 55 to
+60 % of the 4.6 s, crop preparation about 30 %); one change tried and reverted (no gain); left in Known Issues.
+Also found: a runaway dev-server compile loop caused by logging into the project folder (not reproducible on demand).
+
+**Decided by the user (Phase 3 review):**
+1. A mark present on both sides that differs gives **Unsuccessful**, even if the other mark is missing; **Error**
+   only when nothing differs and a value is missing.
+2. A source whose status is not `LIVE` gives **Unsuccessful** with Remarks `Certificate not live on NPTEL (status:
+   <status>)`, not Error. (`verifySource` returns `error: "source_not_live"` and `meta.status`; the PDF is not fetched.)
+3. `vercel.json` sets `{"regions": ["bom1"]}`; the gate is measured from bom1.
+4. The Preview's automation bypass secret is in the local `.env` as `VERCEL_AUTOMATION_BYPASS_SECRET`;
+   `smoke:nptel` sends it only as the `x-vercel-protection-bypass` header and never prints it.
+5. `VERIFY_DEV_ENDPOINT=1` is set on Vercel Preview only.
+
+**Still open for review (rule 11):**
+1. A name or course read by OCR that differs from NPTEL's is `not_confirmed`, not `fail` (OCR can misread names).
+   Phase 4 decides how OCR confidence feeds the tampering verdict.
+2. Source `name`/`course`/`total` come from NPTEL's PDF, falling back to the page's hidden block (shape A only)
+   if the PDF's own value could not be read.
+3. `maxDuration = 30` (see above); to be confirmed by the real deployment.
+4. HTTP: request problems are 400, NPTEL problems are HTTP 200 with an `error` code.
+
+**Changes to earlier phases:** `parse.js` gained `total`, `isNptelHostname`, `isAllowedNptelUrl`; the two Phase 2
+tests that compare whole parse results now include `total` (91 and 84). Phase 2 files `ocr.js`, `qr.js`,
+`index.js` gained diagnostics only (stage in timeout errors, QR trace). No earlier entry is edited.
+
+**Remaining work:** run the gate (below); then finish this entry with the Vercel measurements. Phase 4 (tampering)
+will consume `compareCertificate`'s checks, `source`, `ocrConfidence` and the raw PDF bytes from Phase 2.
+
+**Known issues / TODOs:**
+| # | Item | Priority | Blocking |
+|---|---|---|---|
+| 1 | **GATE NOT RUN:** the live smoke from a Vercel Preview is pending the user's `VERIFY_DEV_ENDPOINT=1` and redeploy. NPTEL might block Vercel's IPs; if so, stop (plan's Contingency) | High | Phase 3 completion |
+| 2 | `/api/verify` is unauthenticated outside dev/Preview-with-flag. Phase 5 MUST remove `guard.js` and `VERIFY_DEV_ENDPOINT`, and add `requireUser()` | High | Phase 5 |
+| 3 | Vercel function region was `iad1` (US East) by default while Atlas and NPTEL are in India. `vercel.json` now sets `bom1`; **not yet deployed or measured**: the gate must confirm the function really runs in `bom1` (smoke output shows the function region) | Medium | Phase 3 gate |
+| 4 | Vercel Preview deployments are behind Vercel Authentication; the user created the automation bypass secret (local `.env`) and `smoke:nptel` sends it. Untested against a real Preview until the gate | Medium | Phase 3 gate |
+| 5 | Shape A's hidden `div.sr` block is the fragile part; a redesign yields `source_format_changed`. Only 2 sessions of real certificates seen | Medium | Phase 10 pilot |
+| 6 | Only `LIVE` status observed; revoked or expired certificates are untested against real NPTEL | Medium | Phase 10 pilot |
+| 7 | No server OCR: an NPTEL PDF without a text layer is `source_unreadable` (none seen yet) | Low | None |
+| 8 | No rate limiting on `/api/verify`: a loop of requests hits NPTEL at full speed. Phase 8; the dev-only guard keeps it closed meanwhile | High | Phase 8 |
+| 9 | The smoke test and these latency numbers use 2 real certificates; NPTEL's "first request sometimes 500" has still never been seen | Low | None |
+| 10 | Phase 2 issues carried: unexplained single OCR timeout (C-014, C-015); a no-QR certificate spends 4 s searching (profile in C-015) | Medium / Low | Phase 7 |
+| 11 | `compareCertificate` is not yet wired to anything (the dashboard is Phase 7); its checks feed Phase 4 | Low | None |
+| 12 | Plain `http://` QR URLs are rejected (carried from Phase 2 issue 10) | Low | None |
 
 ---
 

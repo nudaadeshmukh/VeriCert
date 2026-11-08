@@ -67,4 +67,48 @@ const x2 = base.length + upd.length;
 const prev = Number(/startxref\n(\d+)/.exec(base)[1]);
 upd += `xref\n0 1\n0000000000 65535 f \n4 1\n${String(o4).padStart(10, '0')} 00000 n \n6 1\n${String(o6).padStart(10, '0')} 00000 n \ntrailer\n<</Size 7/Root 1 0 R/Info 6 0 R/Prev ${prev}>>\nstartxref\n${x2}\n%%EOF\n`;
 w('pdf/synthetic-tampered-metadata.pdf', base + upd);
+// ---- NPTEL-side SOURCE PDFs for the Phase 3 server tests (anonymised values, real layouts) ----
+// Jul–Sep 2026 layout: item order name, course, total, marks, candidates, session, weeks, credits, roll.
+w(
+  'pdf/synthetic-source-2026.pdf',
+  buildPdf({
+    lines: [
+      ['ASHA RAMESH KULKARNI', 311, 398],
+      ['ENTREPRENEURSHIP AND IP STRATEGY', 264, 331],
+      ['91%', 487, 295],
+      ['25/25', 371, 262],
+      ['66/75', 569, 262],
+      ['1910', 550, 229],
+      ['JUL-SEP 2026', 371, 134],
+      ['(8 week course)', 379, 119],
+      ['No. of credits recommended: 3', 622, 19],
+      ['Roll No: NPTEL26HS164S000000001', 41, 19],
+    ],
+    info: { Producer: 'MuPDF 1.28.2' },
+  }),
+);
+// Jan–Feb 2025 layout: bottom-up item order, "Roll No:" split from its value, total without a percent sign.
+w(
+  'pdf/synthetic-source-2025.pdf',
+  buildPdf({
+    lines: [
+      ['No. of credits recommended: 1 or 2', 622, 19],
+      ['To verify the certificate', 300, 19],
+      ['Roll No:', 41, 19],
+      ['Jan-Feb 2025', 371, 134],
+      ['(4 week course)', 379, 119],
+      ['Design Thinking - A Primer', 264, 331],
+      ['ASHA RAMESH KULKARNI', 311, 398],
+      ['22.5/25', 371, 262],
+      ['61.88/75', 569, 262],
+      ['84', 487, 295],
+      ['4745', 550, 229],
+      ['NPTEL25MG18S000000001', 120, 19],
+    ],
+    info: { Producer: 'FPDF 1.81', CreationDate: 'D:20250331193315' },
+  }),
+);
+// A PDF whose page has no text at all (a scan, or NPTEL changing its generator): "source_unreadable".
+w('pdf/synthetic-no-text-layer.pdf', buildPdf({ lines: [], info: { Producer: 'FPDF 1.81' } }));
+
 console.log('synthetic fixtures written');

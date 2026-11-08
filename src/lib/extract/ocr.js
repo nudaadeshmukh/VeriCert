@@ -347,7 +347,10 @@ async function run(canvas, budgetMs, need, debug) {
   /** Raw OCR text per crop, only when `debug` is set (it can contain personal data). */
   const raw = {};
   if (debug) result.debug = raw;
-  const timeoutErrors = () => [{ code: 'ocr_timeout', message: 'not confirmed (timeout)' }];
+  // Which step was running, so a timeout says where it stalled (Phase 2 saw one unexplained
+  // timeout; see docs/challenges-log.md C-014/C-015).
+  let stage = 'worker';
+  const timeoutErrors = () => [{ code: 'ocr_timeout', message: 'not confirmed (timeout)', stage }];
 
   try {
     const w0 = performance.now();
@@ -355,6 +358,7 @@ async function run(canvas, budgetMs, need, debug) {
     result.timings.workerMs = performance.now() - w0;
 
     if (need.identity) {
+      stage = 'identity';
       const s = performance.now();
       const crop = toOcrCanvas(cropScaled(canvas, OCR_CROPS.identity, ocrScale(page, OCR_CROPS.identity)));
       const { lines } = await recognise(
@@ -373,6 +377,7 @@ async function run(canvas, budgetMs, need, debug) {
     }
 
     if (need.marks) {
+      stage = 'marks';
       const s = performance.now();
       const marks = await readMarksTable(worker, canvas, deadline, raw);
       result.assignment = marks.assignment;
@@ -383,6 +388,7 @@ async function run(canvas, budgetMs, need, debug) {
 
     // The roll number is optional and only read if there is time left; it never adds an error.
     if (need.roll && deadline - performance.now() > 1500) {
+      stage = 'roll';
       const s = performance.now();
       const roll = await readRollNo(worker, canvas, deadline, raw);
       if (roll) result.rollNo = roll;

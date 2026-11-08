@@ -84,7 +84,7 @@ async function decodeZxing(img) {
  * @param {{ budgetMs?: number }} [opts]
  * @returns {Promise<QrFound | QrFailed>}
  */
-export async function decodeQr(canvas, { budgetMs = QR_BUDGET_MS } = {}) {
+export async function decodeQr(canvas, { budgetMs = QR_BUDGET_MS, trace } = {}) {
   const start = performance.now();
   let attempts = 0;
   /** @type {{ code: string, message: string } | undefined} */
@@ -101,21 +101,30 @@ export async function decodeQr(canvas, { budgetMs = QR_BUDGET_MS } = {}) {
     return { url: parsed.url, shape: parsed.shape, certificateId: parsed.certificateId, method, attempts };
   };
   const outOfTime = () => performance.now() - start > budgetMs;
+  /** Diagnostics only: when `trace` is given, record how long each step takes. */
+  const timed = async (label, fn) => {
+    if (!trace) return fn();
+    const t = performance.now();
+    const r = await fn();
+    trace.push({ label, ms: Math.round(performance.now() - t) });
+    return r;
+  };
 
   // 1 + 2: the page as rendered, both decoders.
   const full = getImageData(canvas);
   attempts++;
-  let hit = accept(decodeJsQr(full), 'jsqr:full');
+  let hit = accept(await timed('jsqr:full', () => decodeJsQr(full)), 'jsqr:full');
   if (hit) return hit;
   attempts++;
-  hit = accept(await decodeZxing(full), 'zxing:full');
+  hit = accept(await timed('zxing:full', () => decodeZxing(full)), 'zxing:full');
   if (hit) return hit;
 
   // 3: crops, upscaled 2x/3x, greyscale + threshold.
   for (const { name, rect } of QR_REGIONS) {
     for (const scale of SCALES) {
-      const crop = cropScaled(canvas, rect, scale);
-      const cropData = getImageData(crop);
+      const cropData = await timed(`prep ${name}@${scale}x`, () =>
+        getImageData(cropScaled(canvas, rect, scale)),
+      );
       for (const filter of FILTERS) {
         if (outOfTime()) {
           return {
@@ -126,13 +135,15 @@ export async function decodeQr(canvas, { budgetMs = QR_BUDGET_MS } = {}) {
             attempts,
           };
         }
-        const img = binarise(cropData, filter === 'otsu' ? 'otsu' : Number(filter.split('-')[1]));
+        const img = await timed(`binarise ${filter}`, () =>
+          binarise(cropData, filter === 'otsu' ? 'otsu' : Number(filter.split('-')[1])),
+        );
         const method = `${name}@${scale}x/${filter}`;
         attempts++;
-        hit = accept(decodeJsQr(img), `jsqr:${method}`);
+        hit = accept(await timed(`jsqr:${method}`, () => decodeJsQr(img)), `jsqr:${method}`);
         if (hit) return hit;
         attempts++;
-        hit = accept(await decodeZxing(img), `zxing:${method}`);
+        hit = accept(await timed(`zxing:${method}`, () => decodeZxing(img)), `zxing:${method}`);
         if (hit) return hit;
       }
     }

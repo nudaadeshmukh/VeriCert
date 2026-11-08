@@ -88,8 +88,12 @@ Pin every dependency to an exact version. Record the versions in `docs/progress.
 
 ## Result semantics
 - **Verification:** `Successful` when both marks equal the verification source (tolerance
-  0.01; decimals allowed). `Unsuccessful` when they differ. `Error` when the QR can't be
-  decoded, the source can't be reached or the marks can't be parsed.
+  0.01; decimals allowed). `Unsuccessful` when **any mark present on both sides differs**
+  (a differing mark is already proof of a mismatch, even if the other mark is missing), or
+  when NPTEL says the certificate is **not live** (Remarks: `Certificate not live on NPTEL
+  (status: <status>)`). `Error` only when nothing differs and a value is missing: the QR can't
+  be decoded, the source can't be reached, or a mark can't be parsed. Precedence: not live,
+  then any difference, then any missing value, then Successful.
 - **Tampering:** independent of Verification. The checks are listed in the plan (Phase 4).
 - **CSV columns, in this order:**
   `Candidate Name, Course Name, Assignment Marks (/25), Exam Marks (/75), Verification, Tampering, Remarks`

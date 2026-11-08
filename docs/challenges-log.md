@@ -191,3 +191,33 @@ returning anything wrong.
 **Guard:** none for the cause. Watch for `ocr_timeout` in Phase 7's batch runs and in the Phase 10 pilot.
 **Also:** running tesseract.js in Node from the repo root wrote `eng.traineddata` there; deleted it
 and added `*.traineddata` to `.gitignore`.
+
+## C-015 — Investigating Phase 2's OCR timeouts and the 4 s no-QR search (Phase 3 side task)
+**Phase:** 3 · **Date:** 2026-11-08
+**Symptom:** C-014: one unexplained `ocr_timeout` in 19 runs, plus harness timeouts on a cold dev server.
+**What was measured:** (1) 60 consecutive extractions in one page (5 images, repeated): 60 of 60 ok, OCR
+median 1,637 ms, max 2,753 ms, 0 timeouts. Two more 30-image runs, one of them touching a source file
+mid-run (Fast Refresh): 30 of 30 each, no timeout, no reload. About 120 runs since the original timeout,
+none timed out. (2) While stress-testing I found my own dev-server log redirected into `tmp/` (inside the
+watched project folder) had set off a runaway loop: each "Compiled" line was a file change that triggered
+another compile, 17,388 log lines, and the browser page reloaded about 8,700 times, so 0 of 60 completed.
+Writing the log outside the project removed it. **I could not make the loop start again on demand** (a
+rerun with the log back inside `tmp/` stayed quiet), so I cannot prove it caused C-014's incidents. It
+would explain the harness timeouts (page reloads) and is a plausible CPU-starvation cause for the single
+`ocr_timeout`, but that is a hypothesis.
+**Root cause:** not established. **Fix:** none to the engine. Instrumentation only: an `ocr_timeout` error now
+carries `stage` (`worker`, `identity`, `marks`, `roll`) so the next occurrence says where it stalled.
+**Guard:** do not redirect dev-server output into the project folder (use a path outside it). Watch for
+`ocr_timeout` in Phase 7 and the Phase 10 pilot.
+
+**The 4 s no-QR search, profiled** (new off-by-default `trace` option of `decodeQr`, shown via `debug`):
+a page with no QR, one run, 38 timed steps, 4,684 ms (stopped by the 4 s budget): jsQR 11 calls, 2,609 ms
+(median 196, max 467 ms); zxing-wasm 11 calls, 540 ms (median 33); crop + scale 6 calls, 860 ms; threshold
+10 calls, 671 ms. A first trace agreed (jsQR 2,726 ms of 4,477 ms). So **jsQR on the upscaled crops is about
+55 to 60 % of the cost**, and crop preparation about 30 %.
+Tried: single-polarity jsQR (`dontInvert`) on the binarised crops, since zxing already tries inverted
+images. Result: individual jsQR calls got about 25 % cheaper (636 to 467 ms at worst), but the failing
+search still took 4.1 to 4.7 s (3 runs) because jsQR's cost is mostly its pixel-proportional search, not
+the inversion. **Reverted**: no measurable gain. Dropping jsQR on crops would lose measured successes
+(jsQR on the bottom strip found 2 of my 8 test images where zxing did not), and shrinking the search or
+the 4 s budget has no data behind it. **Left as a Known Issue** with this profile.
