@@ -25,12 +25,12 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 
 | | |
 |---|---|
-| **Current phase** | Phase 3 complete (gate passed from a Vercel Preview in `bom1`), awaiting user review. |
-| **Next phase** | Phase 4: Tampering checks (not started; waits for approval) |
+| **Current phase** | Phase 4 complete, awaiting user review. |
+| **Next phase** | Phase 5: Authentication (not started; waits for approval). It must remove the temporary `/api/verify` guard (Phase 3 known issue 2) |
 | **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`). Still running Phase 1 code (`0.1.0+107e806`); Phase 2 is not deployed |
 | **Preview URL** | None. No Preview deployment exists (see Phase 1 deviation). |
-| **Does it run?** | Locally: yes. The browser reads PDF, PNG and JPG (`/dev/extract`). `POST /api/verify` fetches NPTEL values and works on the Vercel **Preview** (`VERIFY_DEV_ENDPOINT=1`, Preview only) and in dev; it is closed on Production. No sign-in or upload page yet. |
-| **Latest measured results** | **From Vercel Preview, function region `bom1`: 10 of 10 live verifications exact (both URL shapes); round trip p50 586 ms, max 1,944 ms; inside `verifySource` p50 284 ms, max 1,886 ms (n = 10).** Extraction in Chromium (Phase 2): 2026 PDF 624 ms warm, `NPTEL.png` 1,101 ms warm (medians). |
+| **Does it run?** | Locally: yes. The browser reads PDF, PNG and JPG, runs the six tampering checks and gives a tampering verdict (dev pages `/dev/extract`, `/dev/tamper`, 404 in production). `POST /api/verify` works on Vercel Preview only. Production runs an older shell. No sign-in or upload page yet. |
+| **Latest measured results** | Tampering checks add about 0.6 to 0.7 s per PDF warm (medians 573 and 731 ms), about 0.8 to 1.1 s cold, about nothing for images. All genuine samples give "No tampering detected"; the tampered PNG and the synthetic tampered-metadata and edited-text-layer fixtures give "Tampering detected". Phase 3 gate, from Vercel `bom1`: 10 of 10 verifications exact, p50 586 ms, max 1,944 ms. |
 
 | Phase | Status |
 |---|---|
@@ -38,7 +38,7 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 | 1 — Project foundation | ✅ complete (verified on Production, not Preview) |
 | 2 — Certificate extraction engine | ✅ complete (verified in local Chromium; not deployed) |
 | 3 — Verification service and comparison | ✅ complete (gate passed: live smoke from a Vercel Preview, region bom1) |
-| 4 — Tampering checks | ⏳ not started |
+| 4 — Tampering checks | ✅ complete (verified in local Chromium; not deployed) |
 | 5 — Authentication | ⏳ not started |
 | 6 — Persistence and history | ⏳ not started |
 | 7 — Dashboard UI | ⏳ not started |
@@ -568,6 +568,143 @@ tests that compare whole parse results now include `total` (91 and 84). Phase 2 
 | 10 | Phase 2 issues carried: unexplained single OCR timeout (C-014, C-015); a no-QR certificate spends 4 s searching (profile in C-015) | Medium / Low | Phase 7 |
 | 11 | `compareCertificate` is not yet wired to anything (the dashboard is Phase 7); its checks feed Phase 4 | Low | None |
 | 12 | Plain `http://` QR URLs are rejected (carried from Phase 2 issue 10) | Low | None |
+
+---
+
+## Phase 4 — Tampering checks
+
+**Status:** complete. Every genuine sample gives "No tampering detected"; the known-tampered PNG and the synthetic
+tampered-metadata and edited-text-layer fixtures give "Tampering detected" and name the failing check. Verified in
+Chromium on the real samples. Not deployed (the checks run in the browser and nothing calls them from a page yet).
+
+**Branch:** `temp` (rule 14).
+
+**Order of work (as requested):** the genuine samples were surveyed FIRST, their metadata and render-versus-text-layer
+behaviour recorded in `NOTES.md` §6, and only then were thresholds written into `config.js`.
+
+**Completed features** (`src/lib/tamper/`, all pure: no browser APIs, a test enforces it):
+- `metadata.js`: `readPdfMetadata(bytes, pdfjsInfo)` reads the RAW bytes: Producer, Creator, CreationDate, ModDate (all
+  occurrences, so a rewritten Info dictionary shows its history; literal, hex, UTF-16BE and indirect strings), XMP tool names,
+  counts of `%%EOF`, `startxref`, xref tables, XRef streams and `/Prev`, linearized and encrypted flags. pdf.js' own `info` is a
+  fallback only (the 2026 genuine file keeps its Producer in a Catalog-level `/Info` that pdf.js does not see). No thresholds in it.
+- `config.js`: every bound, each with a comment citing the samples (G1, G2, G3) or saying plainly that none exists:
+  `EDITOR_DENYLIST` (14 dedicated editors and online editing services; generators such as "Adobe PDF Library", Word, Skia/PDF
+  and LibreOffice are deliberately NOT listed), `MODDATE_MIN_GAP_SECONDS` = 1 day (uncalibrated: no genuine ModDate exists),
+  `BASELINE_STRUCTURE` (plain: 1 `%%EOF`, 0 `/Prev`; linearized: 2 and 1, untested), `LAYER_MARK_TOLERANCE` 0.01,
+  `LAYER_TEXT_MIN_OCR_CONFIDENCE` 85 (genuine names read at 92 to 93, courses 94 to 96), `LAYER_TEXT_MIN_DIFFERENCE_RATIO` 0.5,
+  `NOT_CONFIRMED_LIMIT` 0.5, `CORE_CHECKS`. A test checks that nothing numeric is hardcoded in `checks.js` and that every config
+  value has a comment block.
+- `checks.js`: the six checks, each `pass | fail | not_confirmed | not_applicable` plus a detail:
+  `id_match` (`/noc/E_Certificate/<ID>`: the ID must start with the printed roll number; `/verify/<ID>`: `not_applicable`, no
+  relationship observed; an OCR-read roll that mismatches is `not_confirmed`, only a text-layer roll can fail),
+  `name_match` / `course_match` (from `compareCertificate`; a text-layer difference fails, an OCR difference is `not_confirmed`),
+  `marks_match` (a mark present on both sides that differs fails; missing is `not_confirmed`),
+  `layer_vs_render` (PDF only: text layer against the OCR of the rendered crops; marks fail on any difference above 0.01, name and
+  course fail only if the OCR line has confidence of at least 85 AND at least half the characters differ; anything unreadable is
+  `not_confirmed`), `metadata` (PDF only: fails on an editor Producer/Creator, current or left by an earlier save, a ModDate more
+  than 1 day after CreationDate, or an incremental update; an unknown Producer is noted in the detail and never flags).
+  `assessTampering({ extraction, comparison })` gives the verdict exactly as the plan says: any `fail` is **Tampering detected**
+  (failing checks named); if none of name, course and marks produced a pass or fail it is **Not checked**; if at least half of the
+  applicable checks are `not_confirmed` it is **Not checked**; otherwise **No tampering detected** (a minority of `not_confirmed`
+  is listed in the reason). A fail wins over everything, so an edited text layer is caught even with NPTEL unreachable.
+- Extractor (`src/lib/extract`, additive): `extractCertificate(file, { evidence: true })` adds `evidence` for PDFs (retained
+  bytes, pdf.js metadata, the text-layer values captured before any OCR fallback, and an OCR of the rendered page's name, course and
+  marks crops, reusing Phase 2's OCR including its two-passes-must-agree rule); the result now has `fileKind`; `readPdf` returns pdf.js'
+  `info`. Without the option nothing changes.
+- `app/dev/tamper/` (page + `TamperScratch.js`): dev-only scratch page running extraction, the NPTEL source (a source map box, or `?live=1`
+  against the real `/api/verify`), `compareCertificate` and `assessTampering`; `?measure=1` times the extraction without evidence first.
+  404 in production (checked against `next start`). The PDF bytes are never put into the page.
+- `e2e/helpers/syntheticCertificate.js`: draws a synthetic NPTEL-style certificate on a canvas in the browser and wraps it in a PDF
+  with an INVISIBLE text layer (render mode 3) that the test controls: the "edited text layer" fixture. Nothing real, nothing committed as a binary.
+
+**Files modified:** `src/lib/extract/index.js`, `pdf.js`, `ocr.js` (see "Changes to earlier phases"), `playwright.config.js`
+(`workers: 1`), `NOTES.md` (§6), `docs/challenges-log.md` (C-017, C-018), `README.md`.
+New: `src/lib/tamper/*`, `app/dev/tamper/*`, `tests/unit/tamper.test.js`, `e2e/tamper.spec.js`, `e2e/helpers/syntheticCertificate.js`.
+
+**Dependencies added:** none.
+
+**Results on the genuine and tampered samples** (Chromium, NPTEL's source stubbed with the values NPTEL serves, which Phase 3's smoke
+test proved; one test also runs the full chain against the real `/api/verify`):
+| Sample | id | name | course | marks | layer vs render | metadata | Tampering verdict | Verification |
+|---|---|---|---|---|---|---|---|---|
+| G1 genuine 2026 PDF (MuPDF 1.28.2) | n/a | pass | pass | pass | pass | pass | **No tampering detected** | Successful |
+| G2 genuine 2025 PDF (FPDF 1.81) | pass | pass | pass | pass | pass | pass | **No tampering detected** | Successful |
+| G3 genuine 2025 screenshot | pass | pass | pass | pass | n/a | n/a | **No tampering detected** | Successful |
+| JPEG copies of G3 (quality 92 and 75) | | | | | | | **No tampering detected** (both) | |
+| `NPTEL_tampered.png` (marks 20 and 70) | pass | pass | pass | **FAIL** | n/a | n/a | **Tampering detected (marks_match)** | Unsuccessful |
+| JPEG copy of the tampered PNG (quality 85) | | | | | | | **Tampering detected** (names marks_match) | |
+| LIVE chain on G1 with the real NPTEL | | | | | | | No tampering detected | Successful |
+**No genuine sample was flagged, so no threshold had to be adjusted.** Synthetic fixtures:
+| Fixture | Verdict | Failing check |
+|---|---|---|
+| `synthetic-tampered-metadata.pdf` (Acrobat Producer, ModDate 172 days later, incremental update; NPTEL agrees with its text) | Tampering detected | `metadata` only (the detail names all three signals) |
+| Generated image PDF, hidden text edited to 25/25 and 75/75 (picture says 12.25 and 40.5), NPTEL agrees with the edited text | Tampering detected | `layer_vs_render` only |
+| Same, against NPTEL's real values | Tampering detected | `marks_match`, `layer_vs_render` |
+| Same, NPTEL unreachable | Tampering detected | `layer_vs_render` (a fail beats "Not checked") |
+| Hidden NAME edited to a clearly different name | Tampering detected | `layer_vs_render` |
+| Same file with a `Sejda` Producer | Tampering detected | `metadata` |
+| Control: hidden text matches the picture | No tampering detected | none (`layer_vs_render` pass) |
+| `synthetic-genuine-style.pdf` (FPDF Producer, no QR, plain layout the render OCR cannot read) | No tampering detected | none (`id_match` and `layer_vs_render` are `not_confirmed`: a tolerated minority, 2 of 6) |
+| Genuine-style PDF with no NPTEL source | Not checked | none |
+| A file that is not an image | Not checked | none |
+
+**Tests:**
+- Vitest: 333 passed in 11 files (was 245 in 10): `tamper.test.js` 88 (the raw reader on escapes, hex, UTF-16 and indirect strings, the
+  ModDate threshold exactly at the limit and one second over, every signal in isolation, the denylist not matching any genuine
+  Producer, linearized baseline, each check's boundaries including name confidence 85 vs 84 and difference ratio 0.5 vs 0.4, every
+  verdict path, only three verdict strings exist, config comments and purity).
+- Playwright: 37 passed in 2.2 min (was 20): 17 new in `e2e/tamper.spec.js`. With `workers: 1`. In a parallel run with 3 workers 6 tests failed
+  on the OCR time budget (C-018).
+- Lint: clean. Build: passes. Production build: `/dev/tamper` and `/dev/extract` return 404.
+
+**Measured results** (Chromium 158 headless, `next dev`, this machine; added time = extraction with evidence minus extraction
+without, plus the assessment; cold = a new browser context each time, n = 3; warm = same page, workers running, n = 5;
+min / median / max in ms):
+| Sample | Cold added | Warm added | Warm extraction without, then with evidence | Assessment itself (median) |
+|---|---|---|---|---|
+| G1 2026 PDF | 782 / 804 / 893 | 318 / 573 / 1,348 | 612, then 1,152 | 27.6 ms |
+| G2 2025 PDF | 1,124 / 1,142 / 1,302 | 696 / 731 / 854 | 883, then 1,572 | 42.9 ms |
+| G3 screenshot | about 0 | -100 / -8 / 90 (noise around zero) | 934, then 922 | 0.1 ms |
+| Tampered screenshot | about 0 | -225 / 33 / 124 (noise around zero) | 792, then 793 | 0.2 ms |
+So the tampering checks add **about 0.6 to 0.7 s per PDF warm (medians 573 and 731 ms) and about 0.8 to 1.1 s cold**, nearly all of it the OCR of the rendered
+page; **about nothing for images** (the assessment takes 0.1 to 0.2 ms; the negative figures are noise, and the cold negatives are an ordering
+artefact: in measure mode the extraction without evidence runs first and pays the OCR engine start-up). A 100-PDF batch would take roughly 1 to 1.2 minutes longer.
+OCR crop-size change (C-017), same machine: render OCR on a PDF warm 1.5 to 2.0 s before, 0.44 to 1.4 s after.
+
+**Changes to earlier phases (Phase 2 code; no earlier entry is edited):**
+- `ocr.js`: crops are scaled to the pixel sizes the OCR was tuned at instead of fixed zoom factors (C-017); on a 1054 px image nothing changes.
+- `ocr.js`: the 8 s per-certificate budget NO LONGER includes the one-time engine start-up, which has its own 30 s limit
+  (`OCR_WORKER_START_BUDGET_MS`) (C-018). Phase 2's progress entry says the budget includes start-up; that is superseded here.
+- `index.js`/`pdf.js`: `evidence` option, `fileKind`, `info` (all additive).
+- `playwright.config.js`: `workers: 1` and the 60 s timeout.
+
+**Decisions to review (rule 11):**
+1. **Name and course edits on a SCREENSHOT are not flagged** (OCR text is never a mismatch, rule 6): such a certificate gets at worst a tolerated
+   `not_confirmed`. Marks edits are caught (`marks_match`); a changed name with the same marks is not. See Known issue 3.
+2. An OCR-read roll number that does not match the QR ID is `not_confirmed`, not `fail` (OCR turns S into 5, C-011).
+3. "Not checked" when none of name, course and marks could be compared, or when at least half of the applicable checks are `not_confirmed`
+   (the plan only says "a minority" is tolerated; "at least half" is my reading).
+4. Any `fail` wins, even with NPTEL unreachable (an edited text layer is detected without NPTEL).
+5. `metadata` fails if ANY earlier Producer left behind by an incremental update is on the denylist, not only the current one.
+6. The ModDate threshold (1 day) and the name/course bounds are uncalibrated (no genuine ModDate or genuine OCR difference exists).
+
+**Remaining work:** none for Phase 4. Nothing calls `assessTampering` outside the dev page yet: wiring it into the run (Phase 7), the
+saved results and counts (Phase 6) and the CSV mapping (`Not checked` is written as `No tampering detected`, with the reason in Remarks) come later.
+
+**Known issues / TODOs:**
+| # | Item | Priority | Blocking |
+|---|---|---|---|
+| 1 | The basis is small: 2 genuine PDFs (2 sessions, 2 generators) and 1 genuine screenshot. Thresholds not calibrated on a genuine sample: ModDate gap, every denylist entry (only absence from G1 and G2 is known), the name/course OCR bounds, the linearized baseline, and the `/noc/E_Certificate/` roll-prefix rule (one genuine sample). Collect 5 to 10 more genuine certificates, with at least one carrying a ModDate | High | Phase 10 pilot |
+| 2 | False-positive risks that no sample can rule out: NPTEL changes generator between sessions and its 2026 file looks post-processed, so a future genuine file could carry a denylisted tool (for example Acrobat) or be digitally signed (a signature is an incremental update). Unknown Producers never flag, so a NEW editor evades the denylist | High | Phase 10 pilot |
+| 3 | A changed NAME or COURSE on a screenshot or JPG is not flagged (decision 1), and Verification only compares marks. A forged image with the right marks and another name passes every check | High | Phase 10 pilot |
+| 4 | Each PDF costs about 0.6 to 0.7 s warm (0.8 to 1.1 s cold) for the render OCR. In a 100-PDF batch that is over a minute | Medium | Phase 7 |
+| 5 | `layer_vs_render` needs the page layout the OCR understands (printed boilerplate and the 4-cell table with borders). Other layouts give `not_confirmed`, so they are not checked, never flagged | Medium | Phase 10 pilot |
+| 6 | The OCR time budget is wall-clock: on a slow or busy device it fires (C-018, reproduced by running 3 browsers in parallel). Phase 7's 3 to 4 certificates at once must be measured; the budget or the concurrency may have to adapt | Medium | Phase 7 |
+| 7 | The raw metadata scan reads the file as a Latin-1 string (27 to 43 ms for 0.9 to 1.5 MB). An Info dictionary inside a compressed object stream is only seen through the pdf.js fallback, which has not been exercised on a real file | Low | None |
+| 8 | A PDF with an incremental update, or a Producer on the denylist, is flagged even if the content is untouched. By design, but an honest edit (for example adding an annotation) would be flagged too | Low | None |
+| 9 | The e2e suite needs the gitignored `samples/` and the NPTEL-served 2025 PDF in `samples/derived/`, and runs with one worker (about 2 minutes) | Low | None |
+| 10 | The OCR crop-size change was verified on the two genuine PDFs at 3,200 px and on the 1054 px images, not on large phone photos | Low | Phase 10 pilot |
+| 11 | `CLAUDE.md` "Known facts" still says the Jul to Sep 2026 sample has no Producer; NOTES.md §1.1 and §6 record that it has `MuPDF 1.28.2` in a Catalog-level Info dictionary | Low | None |
 
 ---
 

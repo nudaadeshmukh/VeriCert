@@ -234,3 +234,43 @@ keeps whatever a file already has, so Windows checkouts and tools wrote a mix.
 every text file, and `.prettierrc.json` has `endOfLine: "lf"`. `prettier --write` brought the four CRLF files to LF.
 No `git add --renormalize .` is needed: the index already holds LF everywhere, so it would change nothing.
 **Guard:** `npm run lint` (Prettier check) now fails on CRLF in any Prettier-covered file.
+
+## C-017 — OCR of a PDF's rendered page was 3 to 5 times slower than OCR of a screenshot
+**Phase:** 4 · **Date:** 2026-11-08
+**Symptom:** the new render-versus-text-layer check added 3,361 ms and 4,696 ms (first run, including worker start) and
+1.5 to 2.0 s warm per PDF, against about 0.9 s for a 1054 px screenshot. Marks alone took 0.9 to 1.5 s against 0.3 s.
+**Root cause (measured, not assumed):** a PDF page renders at up to 3,200 px, and the Phase 2 OCR scaled crops by FIXED
+factors tuned on 1054 px images: identity crop never smaller than 1x, marks cells always 2x, 3x, 4x and 5x. On a 3x larger
+render that meant OCR of images about 3 times bigger than the sizes it was tuned and measured at.
+**Fix:** scale to the same PIXEL sizes, not the same factors. `src/lib/extract/ocr.js`: the identity crop is scaled to about
+1,400 px wide (`ocrScale` may now go down to 0.35x); each marks-cell pass has a target HEIGHT (76, 114, 152, 190 px, which
+is exactly what 2x to 5x gave on the 38 px cells of the 1054 px samples), capped at 8x. On a 1054 px image nothing changes.
+**Result:** warm added time per PDF 1.5 to 2.0 s down to 0.44 to 1.4 s (medians 0.57 s and 0.73 s in the final measurement).
+Accuracy re-checked: the text layer and the render OCR still agree exactly on both genuine PDFs (names at confidence 92 to
+93, courses 94 to 96), and the Phase 2 browser tests on the real samples still pass.
+**Guard:** `e2e/extract.spec.js` and `e2e/tamper.spec.js` on the real samples (PDF renders at 3,200 px included).
+
+## C-018 — Running the browser tests in parallel makes the OCR budget fire (first time `ocr_timeout` reproduced)
+**Phase:** 4 · **Date:** 2026-11-08
+**Symptom:** a full Playwright run with 3 workers took 5.7 minutes (the 17 tamper tests alone take about 1.5 minutes) and
+6 tests failed, every one on the OCR wall-clock budget: `ocr_timeout` with `stage: "worker"` and `stage: "identity"`, and an
+extraction over 8 s. The same tests pass on their own and in a sequential run.
+**Root cause:** CPU starvation. Three Chromium instances each running tesseract next to the Next dev server (Turbopack also
+logged "frequent file updates ... waiting for the filesystem to settle" on files under this OneDrive folder) left the OCR worker
+too little CPU to finish inside 8 s. The budget is wall-clock by design, so it fails closed (`not confirmed (timeout)`) instead of
+returning anything wrong.
+**Why it matters:** this is the first time the Phase 2 timeout (C-014, C-015) has been reproduced on demand, and it supports the
+hypothesis recorded there: the unexplained single timeout was starvation, not a logic bug. The new `stage` field in the error
+(added in Phase 3) is what made the cause readable.
+**Fix:** `playwright.config.js` sets `workers: 1`. No change to the engine.
+**Guard:** the config comment. Phase 7's parallel processing of 3 to 4 certificates must be measured on the same point: on a
+slow or busy device the 8 s budget will fire, so the budget (or the concurrency) may need to adapt.
+
+**Second finding in C-018 (found when the sequential run still failed two tests):** the OCR engine's one-time start-up was
+charged to the first certificate's 8 s budget. The failing run showed `workerMs: 5492` (normally 0.4 to 0.5 s, 1.8 s once
+earlier), leaving 2.5 s, so `stage: "identity"` timed out. Every Playwright test opens a fresh page and therefore starts a fresh
+worker, which is why the tests hit it; in production the first certificate of a session would download about 7 MB (core and
+language data) inside its own budget and time out on a slow network.
+**Fix:** `src/lib/extract/ocr.js`: start-up has its own limit (`OCR_WORKER_START_BUDGET_MS`, 30 s) and the per-certificate
+budget (8 s) starts only once the engine is ready.
+**Guard:** the Phase 2 timeout test (`?budget=1`) still passes; `e2e/tamper.spec.js` runs the engine cold in every test.

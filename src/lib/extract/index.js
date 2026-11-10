@@ -15,6 +15,7 @@ import { parseCertificateText } from './parse.js';
  *   name: string | null, course: string | null, assignment: number | null, exam: number | null,
  *   verifyUrl: string | null, certificateId: string | null, rollNo?: string,
  *   source: 'text_layer' | 'ocr',
+ *   fileKind: 'pdf' | 'png' | 'jpeg' | null,
  *   qr?: { method: string, shape: string, attempts: number },
  *   ocrConfidence?: { name?: number, course?: number, marks?: number },
  *   timings: Record<string, number>,
@@ -48,10 +49,12 @@ const round = (n) => Math.round(n);
 
 /**
  * @param {File | Blob} file a PDF, JPG or PNG
- * @param {{ ocrBudgetMs?: number, debug?: boolean }} [opts] `debug` adds the raw OCR text (dev only: it may contain personal data)
+ * @param {{ ocrBudgetMs?: number, debug?: boolean, evidence?: boolean }} [opts] `debug` adds the raw OCR text (dev only: it may contain personal data).
+ *   `evidence` (PDFs only) adds `out.evidence` for the Phase 4 tampering checks: the retained PDF bytes, pdf.js' metadata,
+ *   the text-layer values, and an OCR of the rendered page's name, course and marks crops
  * @returns {Promise<ExtractResult>}
  */
-export async function extractCertificate(file, { ocrBudgetMs, debug = false } = {}) {
+export async function extractCertificate(file, { ocrBudgetMs, debug = false, evidence = false } = {}) {
   const start = performance.now();
   /** @type {ExtractResult} */
   const out = {
@@ -62,6 +65,7 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false } = 
     verifyUrl: null,
     certificateId: null,
     source: 'text_layer',
+    fileKind: null,
     timings: {},
     errors: [],
   };
@@ -70,6 +74,7 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false } = 
 
   try {
     const kind = await sniffType(file);
+    out.fileKind = kind;
     if (!kind) {
       out.errors.push({ code: 'unsupported_type', message: 'Not a PDF, JPG or PNG file' });
       return finish(out, start);
@@ -109,6 +114,20 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false } = 
       });
       if (parsed.rollNo) out.rollNo = parsed.rollNo;
       textErrors = parsed.errors;
+      if (evidence) {
+        out.evidence = {
+          pdfBytes: pdf.bytes,
+          pdfInfo: pdf.info,
+          // what the TEXT LAYER said, before any OCR fallback fills gaps
+          textLayer: {
+            name: parsed.name,
+            course: parsed.course,
+            assignment: parsed.assignment,
+            exam: parsed.exam,
+          },
+          renderOcr: null,
+        };
+      }
 
       const worthy = (field) => textErrors.some((e) => e.field === field && OCR_WORTHY.has(e.code));
       needOcr = {
@@ -174,6 +193,34 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false } = 
       }
       ocrErrors = ocr.errors;
       if (debug) out.debug = ocr.debug;
+    }
+
+    // Tampering evidence (opt-in, PDFs only): read the RENDERED page's name, course and marks with the same
+    // OCR (crops only, agreement rule, 8 s budget) so layer_vs_render can compare it with the text layer.
+    if (evidence && kind === 'pdf' && out.evidence) {
+      const tl = out.evidence.textLayer;
+      const hasIdentity = tl.name !== null || tl.course !== null;
+      const hasMarks = tl.assignment !== null || tl.exam !== null;
+      if (!hasIdentity && !hasMarks) {
+        out.evidence.renderOcrSkipped = 'no_text_layer';
+      } else {
+        const e = performance.now();
+        const r = await ocrCertificate(canvas, {
+          budgetMs: ocrBudgetMs,
+          need: { identity: hasIdentity, marks: hasMarks, roll: false },
+          debug,
+        });
+        out.timings.evidenceOcrMs = round(performance.now() - e);
+        out.evidence.renderOcr = {
+          name: r.name,
+          course: r.course,
+          assignment: r.assignment,
+          exam: r.exam,
+          confidence: r.confidence,
+          errors: r.errors,
+          timings: r.timings,
+        };
+      }
     }
 
     // Final error list: only problems that remain. A text-layer error for a field that OCR

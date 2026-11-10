@@ -2,7 +2,8 @@
 //
 // Rules (CLAUDE.md known facts + plan):
 //  - NEVER OCR a full page: full-page OCR of near-blank PDFs took about 30 s each. Only crops.
-//  - A per-certificate budget (default 8 s, including worker start-up). Running out of time
+//  - A per-certificate budget (default 8 s of OCR work; engine start-up has its own 30 s limit, see
+//    OCR_WORKER_START_BUDGET_MS). Running out of time
 //    gives `ocr_timeout` ("not confirmed (timeout)"): the field is null, never a guess.
 //  - Malformed OCR output ("7" for a name) is "not confirmed", never a mismatch (rule 6).
 //  - tesseract.js is imported only when OCR is actually needed, and everything it would
@@ -18,6 +19,13 @@ import { isPlausibleCourse, isPlausibleName, findRollNo, normalizeText, parseMar
 import { vendorUrl } from './vendor.js';
 
 export const OCR_BUDGET_MS = 8000;
+/**
+ * One-time start-up of the OCR engine (the worker, the 3.9 MB core and the 3 MB language data) has its OWN limit and is NOT
+ * charged to a certificate's budget. Measured (Phase 4): start-up took 0.4 to 0.5 s warm, 1.8 s once, and 5.5 s under CPU
+ * load, which left 2.5 s of an 8 s budget and failed the certificate; on a slow network the first certificate of every session
+ * would have timed out the same way. Exceeding this limit gives `ocr_timeout` with `stage: "worker"`.
+ */
+export const OCR_WORKER_START_BUDGET_MS = 30_000;
 
 /** Crops as fractions of the page. Wide and short: a few lines each, never the page. */
 export const OCR_CROPS = {
@@ -112,9 +120,14 @@ async function recognise(worker, crop, params, deadline) {
   return { text: data.text ?? '', lines: lines.filter((l) => l.text !== '') };
 }
 
-/** Pick the crop's scale so its width is about 1400 px (text ≥ ~30 px tall), within 1x–3x. */
+/**
+ * Pick the crop's scale so its width is about 1400 px (text ≥ ~30 px tall). Up to 3x for small
+ * images, and DOWN to 0.35x for big ones: Phase 4 OCRs the 3,200 px render of a PDF page, and at
+ * native size that took 0.3 to 0.9 s for the identity crop alone against about 0.35 s once it is
+ * brought to the size the 1054 px samples were tuned at (docs/progress.md, Phase 4).
+ */
 function ocrScale(page, rect) {
-  return Math.min(3, Math.max(1, 1400 / (rect.w * page.width)));
+  return Math.min(3, Math.max(0.35, 1400 / (rect.w * page.width)));
 }
 
 const ANCHOR = {
@@ -195,10 +208,19 @@ export function readIdentity(lines) {
  * tampering mismatch downstream. Passes are cheap (about 30 ms each), so all of them are run.
  * Malformed reads ("22.5125": the slash read as a 1) are simply not votes.
  */
-const CELL_PASSES = [2, 3, 4, 5].flatMap((scale) => [
-  { scale, threshold: 140 },
-  { scale, threshold: null },
+/**
+ * Passes are defined by the SCALED CELL HEIGHT in pixels, not by a fixed zoom factor. The heights
+ * (76, 114, 152, 190) are what 2x, 3x, 4x and 5x gave on the 1054 px samples, whose table cells are
+ * 38 px tall once inset: the sizes the agreement rule was tuned and measured at (Phase 2). A bigger
+ * render (a 3,200 px PDF page) gets scaled down to the same sizes instead of being OCR'd at three
+ * times that size, and a smaller image is scaled up more. On a 1054 px image nothing changes.
+ */
+const CELL_PASSES = [76, 114, 152, 190].flatMap((targetHeight) => [
+  { targetHeight, threshold: 140 },
+  { targetHeight, threshold: null },
 ]);
+/** Never magnify a cell more than this (a tiny thumbnail has nothing to gain from 12x). */
+const MAX_CELL_SCALE = 8;
 
 /**
  * Read the two value cells of the marks table on their own (PSM 7, single line, digits / .).
@@ -242,7 +264,12 @@ async function readMarksTable(worker, canvas, deadline, raw) {
     const votes = new Map();
     const readings = [];
     for (const pass of CELL_PASSES) {
-      const crop = cropPixels(canvas, rect, pass.scale, pass.threshold);
+      const crop = cropPixels(
+        canvas,
+        rect,
+        Math.min(MAX_CELL_SCALE, pass.targetHeight / rect.h),
+        pass.threshold,
+      );
       const { text } = await recognise(
         worker,
         crop,
@@ -332,7 +359,8 @@ export function ocrCertificate(canvas, { budgetMs = OCR_BUDGET_MS, need = {}, de
 /** @returns {Promise<OcrResult>} */
 async function run(canvas, budgetMs, need, debug) {
   const t0 = performance.now();
-  const deadline = t0 + budgetMs;
+  // First only the engine start-up is timed (its own limit); the certificate's budget starts when the engine is ready.
+  let deadline = t0 + OCR_WORKER_START_BUDGET_MS;
   /** @type {OcrResult} */
   const result = {
     name: null,
@@ -356,6 +384,7 @@ async function run(canvas, budgetMs, need, debug) {
     const w0 = performance.now();
     const worker = await withDeadline(getWorker(), deadline);
     result.timings.workerMs = performance.now() - w0;
+    deadline = performance.now() + budgetMs;
 
     if (need.identity) {
       stage = 'identity';

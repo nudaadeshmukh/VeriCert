@@ -59,6 +59,7 @@ function loadPdfjs() {
  *   items: { str: string, x: number, y: number, h: number }[],
  *   canvas: HTMLCanvasElement,
  *   renderScale: number,
+ *   info: Record<string, string> | null,
  *   timings: { loadMs: number, renderMs: number }
  * }>}
  */
@@ -103,9 +104,18 @@ export async function readPdf(file) {
       'Rendering the page',
     );
     const renderMs = performance.now() - t1;
+    // pdf.js' own metadata view (the raw bytes are the primary source: src/lib/tamper/metadata.js).
+    /** @type {Record<string, string> | null} */
+    let info = null;
+    try {
+      info = (await doc.getMetadata()).info ?? null;
+    } catch {
+      /* metadata is evidence only; never fail extraction over it */
+    }
 
     return {
       bytes,
+      info,
       pageCount: doc.numPages,
       page: { width: base.width, height: base.height },
       items,
