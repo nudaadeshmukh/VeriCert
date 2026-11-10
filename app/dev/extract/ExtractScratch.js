@@ -16,7 +16,9 @@ export default function ExtractScratch() {
 
   async function onChange(event) {
     const files = [...event.target.files];
-    const budget = new URLSearchParams(window.location.search).get('budget');
+    const params = new URLSearchParams(window.location.search);
+    const budget = params.get('budget');
+    const evidence = params.get('evidence') === '1';
     setBusy(true);
     setRows([]);
     // Loaded here (not at import time) so pdf.js, zxing and tesseract stay lazy.
@@ -25,8 +27,13 @@ export default function ExtractScratch() {
     for (const file of files) {
       const result = await extractCertificate(file, {
         debug: true,
+        evidence,
         ...(budget ? { ocrBudgetMs: Number(budget) } : {}),
       });
+      // Never put the PDF bytes into the page: show their length only.
+      if (result.evidence?.pdfBytes) {
+        result.evidence = { ...result.evidence, pdfBytes: `[${result.evidence.pdfBytes.length} bytes]` };
+      }
       const row = { fileName: file.name, result };
       if ((await sniffType(file)) === 'pdf') {
         row.pdfChecks = await pdfChecks(file).catch((err) => ({ error: String(err?.name) }));

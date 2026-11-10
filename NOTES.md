@@ -161,3 +161,60 @@ because they need a browser or OCR (Phase 2) or could not be reproduced.
 - Behaviour for other sessions and course codes, JPG input, certificates without a QR, expired or
   revoked certificates (`Status` values other than `LIVE`), and Gold/Silver/Elite+Gold layouts.
 - Whether `archive.nptel.ac.in` accepts requests from Vercel IPs.
+
+## 6. Phase 4 baseline: what the genuine samples look like (recorded BEFORE any threshold was set)
+
+Observed 2026-11-08 by running `src/lib/tamper/metadata.js` (raw-byte reader) over every genuine PDF, and the
+render-versus-text-layer OCR over the same files in Chromium. Genuine samples available:
+
+| # | Sample | What it is |
+|---|---|---|
+| G1 | `samples/NPTEL Entrepreneurship and IP Strategies.pdf` | Jul–Sep 2026, NPTEL-served (byte-identical, §1.1) |
+| G2 | `samples/derived/genuine-2025-nptel-served.pdf` | Jan–Feb 2025, the PDF NPTEL serves for the 2025 certificate. Fetched in Phase 0 and copied into `samples/` for this phase. It is the source of `NPTEL.png` |
+| G3 | `samples/NPTEL.png` | screenshot of G2; no PDF structure, so no metadata to read |
+
+`NPTEL_tampered.png` is the known-tampered sample, not a genuine one. There is **one genuine sample per layout**:
+two PDFs from two sessions, and one screenshot.
+
+### 6.1 PDF metadata of the genuine files (raw bytes)
+| Field | G1 (2026) | G2 (2025) |
+|---|---|---|
+| Header, size | `%PDF-1.7`, 932,481 B | `%PDF-1.4`, 1,561,898 B |
+| Producer | `MuPDF 1.28.2` (in a Catalog-level `/Info`; pdf.js reports none) | `FPDF 1.81` |
+| Creator | none | none |
+| CreationDate | none | `D:20250331193315` (2025-03-31 19:33:15) |
+| ModDate | none | none |
+| `%%EOF`, `startxref`, `xref` tables, XRef streams | 1, 1, 1, 0 | 1, 1, 1, 0 |
+| `/Prev` (incremental update) | 0 | 0 |
+| Linearized, encrypted, XMP | no, no, none | no, no, none |
+| Producer history (`/Producer` occurrences) | 1 | 1 |
+
+Observations that matter for the checks:
+- The two genuine sessions use **different generators** (FPDF 1.81, then MuPDF 1.28.2): NPTEL changes its PDF tooling
+  between sessions, so an allowlist of Producers would false-flag the next change. Only a denylist (flag known editors,
+  note unknown ones) is workable.
+- **Neither genuine file has a ModDate**, and G1 has no dates at all. There is no genuine "gap between CreationDate and
+  ModDate" to calibrate against.
+- Neither has a Creator, an incremental update, or more than one `%%EOF`.
+- For the **synthetic** tampered file (`tests/fixtures/pdf/synthetic-tampered-metadata.pdf`) the same reader sees two
+  Producers (`FPDF 1.81`, then `Adobe Acrobat Pro DC 23.1`), 2 `%%EOF`, 1 `/Prev` and a ModDate 172 days after
+  CreationDate. It is invented by us, so it proves the reader can see these signals, not that real tampering looks like this.
+
+### 6.2 The rendered page versus the text layer (genuine PDFs, Chromium, OCR of the same crops as Phase 2)
+| | G1 text layer | G1 render OCR | G2 text layer | G2 render OCR |
+|---|---|---|---|---|
+| Name | identical | identical, confidence 93 | identical | identical, confidence 92–93 |
+| Course | identical | identical, confidence 96 | identical | identical, confidence 94 |
+| Assignment, exam | 25, 66 | 25, 66 | 22.5, 61.88 | 22.5, 61.88 |
+Edit distance between OCR text and text layer: **0 on every field of both genuine PDFs.** No genuine sample has ever
+shown an OCR difference.
+
+### 6.3 What these samples can and cannot justify (rule 7)
+- Justified (confirmed against genuine): a genuine file shows 1 `%%EOF`, no `/Prev`, no ModDate, and render OCR equal to the
+  text layer. So an incremental update, or a render that differs clearly from the text layer, has not been seen in a genuine file.
+- **Not** justified by any genuine sample, so set conservatively and flagged in `config.js` and `docs/progress.md`:
+  the ModDate gap threshold; every entry of the editor denylist (only *absence* from genuine files is known); the OCR
+  confidence and edit-distance bounds for names (no genuine difference exists to measure); the linearized-file baseline
+  (no genuine linearized file); the ID rule for `/noc/E_Certificate/` (one genuine sample).
+- `NPTEL_tampered.png` carries an XMP `tiff:Orientation` chunk the genuine PNG lacks (§1.3). Still **not** used: two PNGs
+  are not enough, and any re-save by an image editor adds it.

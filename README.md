@@ -4,8 +4,8 @@ PICT · NPTEL certificate verification. Staff upload a folder of NPTEL certifica
 each one, checks it against NPTEL's own verification source, runs tampering checks, and lets the
 user export a CSV. Only verified `@pict.edu` accounts can use it.
 
-> **Status: Phase 3 of 10 (verification service).** The browser can read a certificate (PDF, JPG or
-> PNG) and `POST /api/verify` can fetch NPTEL's values for a QR URL; that endpoint is temporarily
+> **Status: Phase 4 of 10 (tampering checks).** The browser can read a certificate (PDF, JPG or
+> PNG) and run the tampering checks, and `POST /api/verify` can fetch NPTEL's values for a QR URL; that endpoint is temporarily
 > unauthenticated and enabled only in dev or on a Vercel Preview. There is no sign-in or upload page yet. See `docs/progress.md` for the current
 > state, `docs/implementation_plan.md` for the plan, and `CLAUDE.md` for the rules.
 
@@ -80,8 +80,10 @@ src/lib/extract/     browser extraction engine: index.js (extractCertificate), p
 src/lib/verify/      server: fetchSource.js (allowlisted fetch), parseSource.js, readPdf.js (unpdf),
                      dedupe.js, guard.js (temporary endpoint guard), index.js (verifySource)
 src/lib/compare.js   marks (±0.01) and name/course checks
+src/lib/tamper/      checks.js (six checks and the verdict), metadata.js (raw PDF bytes), config.js (every threshold,
+                     each with its evidence); pure, no browser APIs
 src/lib/version.js   build version shown by /api/health
-app/dev/extract/     dev-only scratch page for the browser tests (404 in production)
+app/dev/extract/, app/dev/tamper/   dev-only scratch pages for the browser tests (404 in production)
 scripts/             db-indexes.mjs, copy-vendor.mjs
 tests/unit/          Vitest · tests/fixtures/ anonymised data (see its README)
 e2e/                 Playwright
