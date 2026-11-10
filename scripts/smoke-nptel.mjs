@@ -29,6 +29,10 @@ const runs = Number(args.runs ?? 5);
 const gapMs = Number(args.gap ?? 1500);
 const baseUrl = args['base-url']?.replace(/\/+$/, '');
 const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+// Since Phase 5 /api/verify needs a signed-in user. `.env` holds a real session cookie, e.g.
+//   SMOKE_SESSION_COOKIE=__Secure-authjs.session-token=<value>
+// and it is sent as the Cookie header. Never printed. To refresh it, see README "Refreshing SMOKE_SESSION_COOKIE".
+const sessionCookie = process.env.SMOKE_SESSION_COOKIE;
 
 const file = path.resolve(import.meta.dirname, '../samples/smoke.expected.local.json');
 if (!fs.existsSync(file)) {
@@ -54,6 +58,7 @@ async function verifyOnce(url) {
     headers: {
       'content-type': 'application/json',
       ...(bypass ? { 'x-vercel-protection-bypass': bypass } : {}),
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
     },
     body: JSON.stringify({ url }),
     signal: AbortSignal.timeout(40_000),
@@ -75,14 +80,17 @@ async function verifyOnce(url) {
       blockedBy: 'Vercel Deployment Protection (no valid bypass secret)',
     };
   }
-  if (res.status === 404)
+  if (res.status === 401 || res.status === 403) {
     return {
       result: null,
       clientMs,
       region,
-      http: 404,
-      blockedBy: 'the endpoint is disabled (VERIFY_DEV_ENDPOINT / VERCEL_ENV)',
+      http: res.status,
+      blockedBy: sessionCookie
+        ? 'the session cookie was refused (expired or signed out): refresh SMOKE_SESSION_COOKIE, see README'
+        : 'not signed in: set SMOKE_SESSION_COOKIE in .env, see README',
     };
+  }
   let result = null;
   try {
     result = await res.json();

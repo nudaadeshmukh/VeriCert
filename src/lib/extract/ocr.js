@@ -17,6 +17,7 @@
 import { cropPixels, cropScaled, findTableBorders, toOcrCanvas } from './image.js';
 import { isPlausibleCourse, isPlausibleName, findRollNo, normalizeText, parseMarks } from './parse.js';
 import { vendorUrl } from './vendor.js';
+import { normalizeForCompare } from '../compare.js';
 
 export const OCR_BUDGET_MS = 8000;
 /**
@@ -26,6 +27,8 @@ export const OCR_BUDGET_MS = 8000;
  * would have timed out the same way. Exceeding this limit gives `ocr_timeout` with `stage: "worker"`.
  */
 export const OCR_WORKER_START_BUDGET_MS = 30_000;
+/** The second read of the identity crop uses this multiple of the first read's scale (a different size, same text expected). */
+const IDENTITY_SECOND_PASS_FACTOR = 1.3;
 
 /** Crops as fractions of the page. Wide and short: a few lines each, never the page. */
 export const OCR_CROPS = {
@@ -42,6 +45,7 @@ export const OCR_CROPS = {
  * @typedef {{ code: string, field?: string, message: string }} OcrError
  * @typedef {{ name: string | null, course: string | null, assignment: number | null, exam: number | null,
  *   rollNo?: string, confidence: { name?: number, course?: number, marks?: number },
+ *   agreement?: { name: boolean, course: boolean },   two independent reads of the identity crop gave the same text
  *   errors: OcrError[], timings: Record<string, number> }} OcrResult
  */
 
@@ -389,18 +393,37 @@ async function run(canvas, budgetMs, need, debug) {
     if (need.identity) {
       stage = 'identity';
       const s = performance.now();
-      const crop = toOcrCanvas(cropScaled(canvas, OCR_CROPS.identity, ocrScale(page, OCR_CROPS.identity)));
-      const { lines } = await recognise(
-        worker,
-        crop,
-        { tessedit_char_whitelist: '', tessedit_pageseg_mode: '6' },
-        deadline,
-      );
-      if (debug) raw.identity = lines.map((l) => `${Math.round(l.confidence)}|${l.text}`);
-      const id = readIdentity(lines);
+      const base = ocrScale(page, OCR_CROPS.identity);
+      /** One read of the identity crop at a given scale. */
+      const readAt = async (/** @type {number} */ scale) => {
+        const crop = toOcrCanvas(cropScaled(canvas, OCR_CROPS.identity, scale));
+        const { lines } = await recognise(
+          worker,
+          crop,
+          { tessedit_char_whitelist: '', tessedit_pageseg_mode: '6' },
+          deadline,
+        );
+        return { lines, id: readIdentity(lines) };
+      };
+      const first = await readAt(base);
+      // The agreement rule for names and courses (like the marks): a second, independent read at a different scale.
+      // A name or course may only CONTRADICT NPTEL's (a fail) if both reads give the same text.
+      const second = await readAt(Math.min(3, Math.max(0.35, base * IDENTITY_SECOND_PASS_FACTOR)));
+      if (debug) {
+        raw.identity = first.lines.map((l) => `${Math.round(l.confidence)}|${l.text}`);
+        raw.identity2 = second.lines.map((l) => `${Math.round(l.confidence)}|${l.text}`);
+      }
+      const id = first.id;
       result.name = id.name;
       result.course = id.course;
-      Object.assign(result.confidence, id.confidence);
+      const same = (/** @type {string | null} */ a, /** @type {string | null} */ b) =>
+        a !== null && b !== null && normalizeForCompare(a) === normalizeForCompare(b);
+      result.agreement = { name: same(id.name, second.id.name), course: same(id.course, second.id.course) };
+      // The confidence is the LOWER of the two reads, so a doubtful second read lowers it.
+      for (const f of /** @type {const} */ (['name', 'course'])) {
+        const c = [id.confidence[f], second.id.confidence[f]].filter((v) => typeof v === 'number');
+        if (c.length) result.confidence[f] = Math.min(...c);
+      }
       result.errors.push(...id.errors);
       result.timings.identityMs = performance.now() - s;
     }

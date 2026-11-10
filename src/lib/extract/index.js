@@ -18,6 +18,8 @@ import { parseCertificateText } from './parse.js';
  *   fileKind: 'pdf' | 'png' | 'jpeg' | null,
  *   qr?: { method: string, shape: string, attempts: number },
  *   ocrConfidence?: { name?: number, course?: number, marks?: number },
+ *   ocrFields?: string[],                     which fields came from OCR (the others came from the text layer)
+ *   ocrAgreement?: { name: boolean, course: boolean },   two independent OCR reads gave the same name / course
  *   timings: Record<string, number>,
  *   errors: ExtractError[],
  * }} ExtractResult
@@ -176,20 +178,23 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false, evi
       const ocr = await ocrCertificate(canvas, { budgetMs: ocrBudgetMs, need: needOcr, debug });
       out.timings.ocrMs = round(performance.now() - o);
       for (const [k, v] of Object.entries(ocr.timings)) out.timings[`ocr_${k}`] = round(v);
-      let used = false;
+      /** The fields whose value came from OCR (the rest came from the text layer). */
+      const fromOcr = [];
       if (needOcr.identity) {
-        if (out.name === null && ocr.name !== null) ((out.name = ocr.name), (used = true));
-        if (out.course === null && ocr.course !== null) ((out.course = ocr.course), (used = true));
+        if (out.name === null && ocr.name !== null) ((out.name = ocr.name), fromOcr.push('name'));
+        if (out.course === null && ocr.course !== null) ((out.course = ocr.course), fromOcr.push('course'));
       }
       if (needOcr.marks) {
         if (out.assignment === null && ocr.assignment !== null)
-          ((out.assignment = ocr.assignment), (used = true));
-        if (out.exam === null && ocr.exam !== null) ((out.exam = ocr.exam), (used = true));
+          ((out.assignment = ocr.assignment), fromOcr.push('assignment'));
+        if (out.exam === null && ocr.exam !== null) ((out.exam = ocr.exam), fromOcr.push('exam'));
       }
-      if (!out.rollNo && ocr.rollNo) ((out.rollNo = ocr.rollNo), (used = true));
-      if (used) {
+      if (!out.rollNo && ocr.rollNo) ((out.rollNo = ocr.rollNo), fromOcr.push('rollNo'));
+      if (fromOcr.length > 0) {
         out.source = 'ocr';
+        out.ocrFields = fromOcr;
         out.ocrConfidence = ocr.confidence;
+        if (ocr.agreement) out.ocrAgreement = ocr.agreement;
       }
       ocrErrors = ocr.errors;
       if (debug) out.debug = ocr.debug;
@@ -217,6 +222,7 @@ export async function extractCertificate(file, { ocrBudgetMs, debug = false, evi
           assignment: r.assignment,
           exam: r.exam,
           confidence: r.confidence,
+          agreement: r.agreement,
           errors: r.errors,
           timings: r.timings,
         };

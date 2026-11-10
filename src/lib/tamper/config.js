@@ -73,18 +73,42 @@ export const BASELINE_STRUCTURE = Object.freeze({
  */
 export const LAYER_MARK_TOLERANCE = 0.01;
 
+// ------------------------------------------------------------------------- OCR'd names and courses
+
 /**
- * A NAME or COURSE read from the render counts as "clearly different" from the text layer only if BOTH hold:
- *   - the OCR line's confidence is at least this: G1 and G2 read names at 92 to 93 and courses at 94 to 96, so 85 sits
- *     below every genuine reading and a low-confidence line is never trusted to contradict the text layer;
- *   - at least this fraction of the characters differ (edit distance / longer length). OCR slips seen so far are
- *     one character (C-010, C-011), about 0.05 for a 20-character name; 0.5 means half the text differs.
- * No genuine sample has ever shown ANY difference (distance 0 on all four of G1/G2's text fields), so neither bound
- * is measured against a genuine difference; both are set to refuse to flag rather than to catch every edit. Below
- * these bounds a difference is `not_confirmed`.
+ * When is a NAME or COURSE read by OCR allowed to CONTRADICT another source (NPTEL's value for `name_match` and
+ * `course_match`, or the PDF text layer for `layer_vs_render`)? Only if ALL of these hold; otherwise the check is
+ * `not_confirmed` ("could not be confirmed - check manually"), never a fail (CLAUDE.md rule 6):
+ *
+ *   1. AGREEMENT: two independent OCR reads of the identity crop (different scale, Phase 2/4) gave the same text.
+ *   2. CONFIDENCE: the lower of the two reads' line confidences is at least OCR_TEXT_MIN_CONFIDENCE.
+ *   3. CLEARLY DIFFERENT: after normalisation (NFC, case, punctuation) BOTH the edit distance is at least
+ *      OCR_TEXT_MIN_EDIT_DISTANCE characters AND edit distance / longer length is at least
+ *      OCR_TEXT_MIN_DIFFERENCE_RATIO. Equivalently the texts are less than 85 % similar (1 minus the ratio) and differ by
+ *      three or more characters.
+ *
+ * EVIDENCE (measured 2026-11-10, NOTES.md §6 and docs/progress.md Phase 4 follow-up): 54 genuine OCR reads, 6 each of 9
+ * files derived from the two genuine certificates (G3 screenshot, its JPEG copies at quality 95, 85 and 75, the tampered
+ * screenshot's untouched name, the 2025 and 2026 PDFs rendered to 1054 px images, and the render OCR of the G1 and G2 PDF
+ * pages). Every name and course was read EXACTLY (edit distance 0 in 54 of 54), the two reads agreed in 54 of 54, and the lowest
+ * confidence was 92 for names and 94 for courses. Caveat: that is one name and two courses, and repeated reads of identical
+ * bytes are not independent samples; no genuine certificate has ever produced an OCR name or course with any error.
+ *
+ * - CONFIDENCE 85: below every genuine read (92 to 96), so a genuine line always clears it, and a line OCR itself doubts never
+ *   accuses a student.
+ * - EDIT DISTANCE 3: the OCR errors seen anywhere in this project are one character (the S read as a 5 in the roll number, a
+ *   dropped "/" in a mark, C-010, C-011), and none has appeared in a name or course at all. Three characters sits two beyond
+ *   the largest slip ever seen, so a one- or two-letter difference (an OCR slip, or a one-letter forgery) stays
+ *   `not_confirmed` and is left for a manual check.
+ * - RATIO 0.15: three characters in a 20-character name is exactly 0.15, so an ordinary name change clears it; in a 60-character
+ *   course title three characters is 0.05 and does not, because longer text is more likely to carry two or three OCR slips.
+ *
+ * None of the three bounds has been measured against a genuine DIFFERENCE (none exists); they are anchored to the absence of
+ * any OCR error in the genuine samples and to the size of the errors seen elsewhere. Revisit with more genuine certificates.
  */
-export const LAYER_TEXT_MIN_OCR_CONFIDENCE = 85;
-export const LAYER_TEXT_MIN_DIFFERENCE_RATIO = 0.5;
+export const OCR_TEXT_MIN_CONFIDENCE = 85;
+export const OCR_TEXT_MIN_EDIT_DISTANCE = 3;
+export const OCR_TEXT_MIN_DIFFERENCE_RATIO = 0.15;
 
 // ------------------------------------------------------------------------------------------- verdict
 

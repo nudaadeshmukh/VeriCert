@@ -8,15 +8,13 @@
 //
 // PURE: no browser APIs and no I/O. The browser gathers the evidence (src/lib/extract: the PDF bytes, the text layer
 // and an OCR of the render), the server supplies NPTEL's values; this module only judges them.
-import { normalizeForCompare } from '../compare.js';
+import { differenceRatio, normalizeForCompare, ocrTextContradicts } from '../compare.js';
 import { readPdfMetadata } from './metadata.js';
 import {
   BASELINE_STRUCTURE,
   CORE_CHECKS,
   EDITOR_DENYLIST,
   LAYER_MARK_TOLERANCE,
-  LAYER_TEXT_MIN_DIFFERENCE_RATIO,
-  LAYER_TEXT_MIN_OCR_CONFIDENCE,
   MODDATE_MIN_GAP_SECONDS,
   NOT_CONFIRMED_LIMIT,
 } from './config.js';
@@ -52,7 +50,8 @@ const notApplicable = (id, detail) => ({ id, outcome: 'not_applicable', detail }
  * A roll number read by OCR that does not match is `not_confirmed`, not a fail: OCR is known to confuse S and 5
  * in it (C-011). Only a roll from the text layer can fail.
  *
- * @param {{ qr?: { shape: string }, certificateId: string | null, rollNo?: string, source?: string }} x
+ * @param {{ qr?: { shape: string }, certificateId: string | null, rollNo?: string, source?: string,
+ *   ocrFields?: string[] }} x
  * @returns {Check}
  */
 export function idMatchCheck(x) {
@@ -68,7 +67,9 @@ export function idMatchCheck(x) {
   if (x.certificateId.toUpperCase().startsWith(x.rollNo.toUpperCase())) {
     return pass(id, 'The QR certificate ID starts with the printed roll number');
   }
-  if (x.source === 'ocr') {
+  // Per field when the extractor says which fields came from OCR, else the whole certificate's source.
+  const rollFromOcr = x.ocrFields ? x.ocrFields.includes('rollNo') : x.source === 'ocr';
+  if (rollFromOcr) {
     return unconfirmed(
       id,
       `The roll number read by OCR (${x.rollNo}) is not a prefix of the QR ID; OCR text is not treated as a mismatch`,
@@ -124,25 +125,7 @@ export function marksMatchCheck(comparison) {
 
 // -------------------------------------------------------------------------------------- layer_vs_render
 
-/**
- * Edit distance / length of the longer string, by code points (Unicode-safe).
- * @param {string} a
- * @param {string} b
- */
-export function differenceRatio(a, b) {
-  const x = Array.from(a);
-  const y = Array.from(b);
-  if (x.length === 0 && y.length === 0) return 0;
-  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= x.length; i++) {
-    const row = [i];
-    for (let j = 1; j <= y.length; j++) {
-      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
-    }
-    prev = row;
-  }
-  return prev[y.length] / Math.max(x.length, y.length);
-}
+export { differenceRatio };
 
 /**
  * PDF only: the values in the text layer against an OCR of the SAME fields on the rendered page. A mismatch counts
@@ -190,16 +173,18 @@ export function layerVsRenderCheck(evidence, fileKind) {
       same.push(f);
       continue;
     }
-    const confidence = ocr.confidence?.[f];
-    const ratio = differenceRatio(normalizeForCompare(tl[f]), normalizeForCompare(ocr[f]));
-    if (
-      typeof confidence === 'number' &&
-      confidence >= LAYER_TEXT_MIN_OCR_CONFIDENCE &&
-      ratio >= LAYER_TEXT_MIN_DIFFERENCE_RATIO
-    ) {
+    // The same rule as name_match / course_match: the render OCR may only contradict the text layer if its two reads
+    // agreed, it was confident, and the texts are clearly different (config.js). Otherwise it is not_confirmed.
+    const verdict = ocrTextContradicts(normalizeForCompare(tl[f]), normalizeForCompare(ocr[f]), {
+      confidence: ocr.confidence?.[f],
+      agreed: ocr.agreement?.[f],
+    });
+    if (verdict.clearlyDifferent) {
       different.push(`${f}: text layer "${tl[f]}", render "${ocr[f]}"`);
     } else {
-      unclear.push(`${f} (render text differs slightly or with low confidence; not treated as a mismatch)`);
+      unclear.push(
+        `${f} (text layer "${tl[f]}", render "${ocr[f]}": ${verdict.why}; not treated as a mismatch)`,
+      );
     }
   }
 

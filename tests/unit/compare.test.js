@@ -198,6 +198,137 @@ describe('name and course are CHECKS and never change the Verification verdict',
   });
 });
 
+describe('OCR-read name and course: confident, agreed and clearly different FAILS; doubtful is "check manually"', () => {
+  const NPTEL = src({ name: 'ASHA RAMESH KULKARNI', course: 'Design Thinking - A Primer' });
+  // An image certificate: every field from OCR, two reads agreed, confidence 93 and 94 (what the genuine samples show).
+  const image = (over = {}) =>
+    cert({
+      source: 'ocr',
+      ocrFields: ['name', 'course', 'assignment', 'exam'],
+      ocrConfidence: { name: 93, course: 94 },
+      ocrAgreement: { name: true, course: true },
+      ...over,
+    });
+  const name = (over, result = NPTEL) => compareCertificate(image(over), result).checks[0];
+  const course = (over, result = NPTEL) => compareCertificate(image(over), result).checks[1];
+
+  it('the genuine case: identical text still passes, with both names shown', () => {
+    const c = name({});
+    expect(c.outcome).toBe('pass');
+    expect(c.detail).toBe(
+      'Name matches NPTEL. Certificate: "ASHA RAMESH KULKARNI" | NPTEL: "ASHA RAMESH KULKARNI"',
+    );
+  });
+
+  describe('FAILS only when every condition holds', () => {
+    it("a classmate's name on the image: confident, agreed, clearly different", () => {
+      const c = name({ name: 'PRIYA ANIL DESHPANDE' });
+      expect(c.outcome).toBe('fail');
+      expect(c.detail).toContain('clearly differs from NPTEL');
+      expect(c.detail).toContain('Certificate: "PRIYA ANIL DESHPANDE" | NPTEL: "ASHA RAMESH KULKARNI"');
+    });
+    it('a name that shares a surname and a middle name is still clearly different', () => {
+      expect(name({ name: 'ONKAR RAMESH KULKARNI' }).outcome).toBe('fail'); // distance 4 of 21
+    });
+    it('the same rule for the course', () => {
+      const c = course({ course: 'Introduction to Machine Learning' });
+      expect(c.outcome).toBe('fail');
+      expect(c.detail).toContain(
+        'Certificate: "Introduction to Machine Learning" | NPTEL: "Design Thinking - A Primer"',
+      );
+    });
+  });
+
+  describe('is "could not be confirmed – check manually" (never a fail) otherwise', () => {
+    const MANUAL = /^Name could not be confirmed – check manually/;
+    it('low confidence', () => {
+      const c = name({ name: 'PRIYA ANIL DESHPANDE', ocrConfidence: { name: 84 } });
+      expect(c.outcome).toBe('not_confirmed');
+      expect(c.detail).toMatch(MANUAL);
+      expect(c.detail).toContain('OCR confidence is low');
+      expect(c.detail).toContain('Certificate: "PRIYA ANIL DESHPANDE" | NPTEL: "ASHA RAMESH KULKARNI"');
+    });
+    it('confidence exactly at the bound counts as confident', () => {
+      expect(name({ name: 'PRIYA ANIL DESHPANDE', ocrConfidence: { name: 85 } }).outcome).toBe('fail');
+    });
+    it('the two OCR reads disagreed', () => {
+      const c = name({ name: 'PRIYA ANIL DESHPANDE', ocrAgreement: { name: false } });
+      expect(c.outcome).toBe('not_confirmed');
+      expect(c.detail).toContain('the two OCR reads did not agree');
+    });
+    it('no confidence or agreement information at all', () => {
+      expect(
+        name({ name: 'PRIYA ANIL DESHPANDE', ocrConfidence: undefined, ocrAgreement: undefined }).outcome,
+      ).toBe('not_confirmed');
+    });
+    it('a one- or two-letter difference could be an OCR slip (or a one-letter forgery): left for a manual check', () => {
+      for (const n of [
+        'ASHA RAMESH KULKARN',
+        'ASHA RAMESH KULKARNY',
+        'ASHA RAMESH KULKAR',
+        'ASHA RAMASH KULKARNI',
+      ]) {
+        const c = name({ name: n });
+        expect(c.outcome, n).toBe('not_confirmed');
+        expect(c.detail, n).toContain('small enough to be an OCR slip');
+      }
+    });
+    it('the name was not read, or NPTEL has none: both sides are still shown', () => {
+      const unread = name({ name: null });
+      expect(unread.outcome).toBe('not_confirmed');
+      expect(unread.detail).toBe(
+        'Name could not be confirmed – check manually. Certificate: (not read) | NPTEL: "ASHA RAMESH KULKARNI"',
+      );
+      const none = name({}, { source: null, error: 'source_timeout' });
+      expect(none.detail).toBe(
+        'Name could not be confirmed – check manually. Certificate: "ASHA RAMESH KULKARNI" | NPTEL: (not available)',
+      );
+    });
+    it('the course says "Course could not be confirmed – check manually"', () => {
+      const c = course({ course: 'Design Thinking - A Primer X', ocrConfidence: { course: 90 } });
+      expect(c.outcome).toBe('not_confirmed');
+      expect(c.detail).toMatch(/^Course could not be confirmed – check manually/);
+    });
+  });
+
+  it('a long course title is allowed a few OCR slips (ratio bound), a short name is not', () => {
+    const longCourse =
+      'Introduction to Professional Ethics Corporate Governance and Sustainable Business Practices';
+    const slipped = longCourse
+      .replace('Professional', 'Professionel')
+      .replace('Business', 'Busines')
+      .replace('Ethics', 'Ethic');
+    const r = src({ course: longCourse });
+    expect(course({ course: slipped }, r).outcome).toBe('not_confirmed'); // 3 characters of 91
+    expect(course({ course: 'Introduction to Machine Learning and Data Science' }, r).outcome).toBe('fail');
+  });
+
+  describe('text-layer values are unchanged: any normalised difference fails', () => {
+    const layer = (over) =>
+      compareCertificate(cert({ source: 'text_layer', ocrFields: [], ...over }), NPTEL).checks[0];
+    it('a one-letter difference in the TEXT LAYER fails (it is not an OCR slip)', () => {
+      const c = layer({ name: 'ASHA RAMESH KULKARN' });
+      expect(c.outcome).toBe('fail');
+      expect(c.detail).toContain('Certificate: "ASHA RAMESH KULKARN" | NPTEL: "ASHA RAMESH KULKARNI"');
+    });
+  });
+
+  describe('provenance is per field', () => {
+    it('a PDF whose name came from the text layer but whose marks came from OCR still fails on a text-layer name', () => {
+      const c = compareCertificate(
+        cert({ source: 'ocr', ocrFields: ['assignment', 'exam'], name: 'ASHA RAMESH KULKARN' }),
+        NPTEL,
+      ).checks[0];
+      expect(c.outcome).toBe('fail');
+    });
+    it('without ocrFields the whole certificate source decides (older callers)', () => {
+      expect(
+        compareCertificate(cert({ source: 'ocr', name: 'ASHA RAMESH KULKARN' }), NPTEL).checks[0].outcome,
+      ).toBe('not_confirmed');
+    });
+  });
+});
+
 describe('normalizeForCompare (Unicode)', () => {
   it('NFC and case-folding', () => {
     expect(normalizeForCompare('ज़')).toBe(normalizeForCompare('ज़')); // nukta, both forms

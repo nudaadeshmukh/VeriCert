@@ -25,12 +25,12 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 
 | | |
 |---|---|
-| **Current phase** | Phase 4 complete, awaiting user review. |
-| **Next phase** | Phase 5: Authentication (not started; waits for approval). It must remove the temporary `/api/verify` guard (Phase 3 known issue 2) |
+| **Current phase** | Phase 5 (Authentication) code complete, awaiting the user's manual test on the Preview and review. |
+| **Next phase** | Phase 6: Persistence and history (not started; waits for Phase 5 approval). |
 | **Production URL** | https://veri-cert-bay.vercel.app (`/api/health` → `{"ok":true,"db":"up"}`). Still running Phase 1 code (`0.1.0+107e806`); Phase 2 is not deployed |
 | **Preview URL** | None. No Preview deployment exists (see Phase 1 deviation). |
-| **Does it run?** | Locally: yes. The browser reads PDF, PNG and JPG, runs the six tampering checks and gives a tampering verdict (dev pages `/dev/extract`, `/dev/tamper`, 404 in production). `POST /api/verify` works on Vercel Preview only. Production runs an older shell. No sign-in or upload page yet. |
-| **Latest measured results** | Tampering checks add about 0.6 to 0.7 s per PDF warm (medians 573 and 731 ms), about 0.8 to 1.1 s cold, about nothing for images. All genuine samples give "No tampering detected"; the tampered PNG and the synthetic tampered-metadata and edited-text-layer fixtures give "Tampering detected". Phase 3 gate, from Vercel `bom1`: 10 of 10 verifications exact, p50 586 ms, max 1,944 ms. |
+| **Does it run?** | Locally: yes. The browser reads PDF, PNG and JPG, runs the six tampering checks and gives a tampering verdict (dev pages `/dev/extract`, `/dev/tamper`, 404 in production). Sign-in (Google, and email/password with verification and reset) and `/api/verify` behind `requireUser()` work locally against a test database; the Google round trip is untested until the user's manual test. Production runs an older shell. No upload page yet; `/dashboard` is a placeholder. |
+| **Latest measured results** | Tampering checks add about 1.2 to 1.3 s per PDF warm (1.8 s cold) and about nothing for images; the OCR agreement read adds about 0.41 to 0.45 s to each image extraction and PDF render check (A/B, n = 15 per cell; the earlier 0.6 to 0.7 s figure was from a faster session). All genuine samples give "No tampering detected"; the tampered PNG, a forged name and a forged course on the real screenshot, and the synthetic tampered-metadata and edited-text-layer fixtures give "Tampering detected". Phase 3 gate, from Vercel `bom1`: 10 of 10 verifications exact, p50 586 ms, max 1,944 ms. |
 
 | Phase | Status |
 |---|---|
@@ -39,7 +39,7 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 | 2 — Certificate extraction engine | ✅ complete (verified in local Chromium; not deployed) |
 | 3 — Verification service and comparison | ✅ complete (gate passed: live smoke from a Vercel Preview, region bom1) |
 | 4 — Tampering checks | ✅ complete (verified in local Chromium; not deployed) |
-| 5 — Authentication | ⏳ not started |
+| 5 — Authentication | 🟡 code complete; awaiting the user's manual test on the Preview (Google, Resend) |
 | 6 — Persistence and history | ⏳ not started |
 | 7 — Dashboard UI | ⏳ not started |
 | 8 — Admin, security hardening, abuse protection | ⏳ not started |
@@ -577,6 +577,9 @@ tests that compare whole parse results now include `total` (91 and 84). Phase 2 
 tampered-metadata and edited-text-layer fixtures give "Tampering detected" and name the failing check. Verified in
 Chromium on the real samples. Not deployed (the checks run in the browser and nothing calls them from a page yet).
 
+**Review follow-up (2026-11-10): the name and course forgery gap is closed.** A genuine image with only its name or course
+edited is now "Tampering detected" (see "Review follow-up" below). Rule 6 in `CLAUDE.md` is clarified and its Known facts corrected.
+
 **Branch:** `temp` (rule 14).
 
 **Order of work (as requested):** the genuine samples were surveyed FIRST, their metadata and render-versus-text-layer
@@ -649,11 +652,11 @@ test proved; one test also runs the full chain against the real `/api/verify`):
 | A file that is not an image | Not checked | none |
 
 **Tests:**
-- Vitest: 333 passed in 11 files (was 245 in 10): `tamper.test.js` 88 (the raw reader on escapes, hex, UTF-16 and indirect strings, the
+- Vitest: 356 passed in 11 files after the review follow-up (333 before it; was 245 in 10 before Phase 4): `tamper.test.js` 96, originally 88 (the raw reader on escapes, hex, UTF-16 and indirect strings, the
   ModDate threshold exactly at the limit and one second over, every signal in isolation, the denylist not matching any genuine
   Producer, linearized baseline, each check's boundaries including name confidence 85 vs 84 and difference ratio 0.5 vs 0.4, every
   verdict path, only three verdict strings exist, config comments and purity).
-- Playwright: 37 passed in 2.2 min (was 20): 17 new in `e2e/tamper.spec.js`. With `workers: 1`. In a parallel run with 3 workers 6 tests failed
+- Playwright: 44 passed in 3.0 min after the review follow-up (37 before it in 2.2 min; was 20 before Phase 4): 24 new in `e2e/tamper.spec.js`. With `workers: 1`. In a parallel run with 3 workers 6 tests failed
   on the OCR time budget (C-018).
 - Lint: clean. Build: passes. Production build: `/dev/tamper` and `/dev/extract` return 404.
 
@@ -678,15 +681,62 @@ OCR crop-size change (C-017), same machine: render OCR on a PDF warm 1.5 to 2.0 
 - `index.js`/`pdf.js`: `evidence` option, `fileKind`, `info` (all additive).
 - `playwright.config.js`: `workers: 1` and the 60 s timeout.
 
+**Review follow-up (2026-11-10): closing the name and course forgery gap** (the user's required change before approval)
+- **The rule** (`src/lib/compare.js`, thresholds in `src/lib/tamper/config.js`): for a name or course READ BY OCR, `name_match` / `course_match`
+  FAIL only if all three hold: (1) two independent OCR reads of the identity crop (different crop scale) gave the same text; (2) the lower
+  read confidence is at least 85; (3) the texts are clearly different after normalisation: edit distance at least 3 characters AND at least 15 %
+  of the longer text (so less than 85 % similar). Otherwise the check is `not_confirmed` with the detail "Name could not be confirmed – check
+  manually" (Course likewise). A text-layer value that differs still fails outright. The detail of EVERY outcome shows both texts side by
+  side (`Certificate: "…" | NPTEL: "…"`, or `(not read)` / `(not available)`). `layer_vs_render` uses the same rule for its OCR-versus-text-layer
+  comparison, replacing the earlier confidence 85 / ratio 0.5 bounds.
+- **Per-field provenance**: `extractCertificate` now reports `ocrFields` (which fields came from OCR), `ocrConfidence` (lower of the two reads) and
+  `ocrAgreement`; a PDF whose name came from the text layer but whose marks came from OCR is judged on the name as a text-layer value.
+  `id_match` uses the same per-field provenance for the roll number.
+- **Evidence for the thresholds** (NOTES.md §6.4): 54 genuine OCR reads of 9 files from the 2 genuine certificates: all exact (edit distance 0), all
+  agreed, confidence never below 92 (names) / 94 (courses). 85 is below every genuine read; 3 characters is two beyond the largest OCR error seen anywhere
+  in the project (all single characters) and a name change in a 20-character name is at least 0.15; the 0.15 ratio keeps a 60-character course title
+  from being accused over a few slips. Limits: one name and two courses; repeated identical reads are not independent; never tested against a genuine difference.
+- **Results** (Chromium; NPTEL's source stubbed with the values NPTEL serves): every genuine sample (G1, G2, G3, JPEG copies at quality 92 and 75, and a "same
+  name painted back" control) still gives **No tampering detected**. On the REAL genuine screenshot with a forgery painted over it: a classmate's name gives
+  **Tampering detected (`name_match` only)**, a different course gives **`course_match` only**, both give both; each detail shows both names. Synthetic, anonymised
+  image: the owner's image passes, the classmate's name drawn on it gives **Tampering detected (`name_match`)**, a one-letter change gives `not_confirmed` with the
+  manual-check wording and no accusation. In unit tests: low confidence, disagreeing reads, small differences, missing values, text layer versus OCR, per-field provenance.
+- **Tests:** Vitest 356 passed in 11 files (was 333): `compare.test.js` 57 (was 42), `tamper.test.js` 96 (was 88). Playwright 44 passed in 3.0 min, one
+  worker (was 37): 7 new in `e2e/tamper.spec.js` (4 forgeries on the real genuine screenshot, 3 synthetic edited-name images). Lint clean.
+- **Measured cost** (Chromium 158, `next dev`, this machine; the second read is needed for the agreement rule). The earlier timing run of this follow-up was
+  unusable (C-019); this is an A/B with the second read switched off by a temporary switch (since removed), interleaved in one session, 15 runs per cell (first
+  run of each batch discarded), median ms:
+  | | Identity stage, two reads | one read | OCR total, two reads | one read | Name reads agreed |
+  |---|---|---|---|---|---|
+  | G1 2026 PDF (render OCR) | 828 | 380 | 1,233 | 776 | 15 / 15 |
+  | G2 2025 PDF (render OCR) | 804 | 390 | 1,197 | 786 | 15 / 15 |
+  | G3 screenshot (whole extraction) | 790 | 341 | 1,367 | 917 | 15 / 15 |
+  So the second read adds **about 0.41 to 0.45 s** to every image extraction and to every PDF's render check.
+  Total added by the tampering checks per PDF in this session (fresh dev server; extraction with evidence minus without, plus the assessment; n = 3 cold, 5 warm):
+  | Sample | Cold added (min / med / max) | Warm added | Warm extraction without, then with evidence | Assessment |
+  |---|---|---|---|---|
+  | G1 2026 PDF | 1,782 / 1,798 / 1,831 | 1,230 / 1,240 / 1,300 | 652, then 1,863 | 36.5 ms |
+  | G2 2025 PDF | 1,795 / 1,836 / 1,840 | 1,232 / 1,340 / 1,348 | 1,071, then 2,334 | 65.5 ms |
+  | G3 screenshot, tampered screenshot | about 0 | -100 to 37 (noise) | 1,610 and 1,534, then about the same | 0.2 ms |
+  So a PDF's tampering checks now cost **about 1.2 to 1.3 s warm and 1.8 s cold** (was 0.57 to 0.73 s warm before the second read), about 0.45 s of it the second read; the rest of
+  the difference is this session being slower than the first one (an untouched stage, the roll OCR, had gone from 175 to 335 ms in an earlier run of the same day), so only the
+  A/B is a controlled comparison. A 100-PDF batch would take roughly 2 minutes longer. Images: the tampering checks add about nothing, but image extraction itself is
+  now about 0.45 s slower (Known issue 12 lists making the second read lazy).
+- **`CLAUDE.md`:** rule 6 clarified (unreadable or low-confidence OCR is never a mismatch; confident, agreed, clearly different OCR is); the Known facts now record the
+  2026 sample's Producer `MuPDF 1.28.2`, the Jan–Feb session label, and the OCR bullet points to rule 6.
+
 **Decisions to review (rule 11):**
-1. **Name and course edits on a SCREENSHOT are not flagged** (OCR text is never a mismatch, rule 6): such a certificate gets at worst a tolerated
-   `not_confirmed`. Marks edits are caught (`marks_match`); a changed name with the same marks is not. See Known issue 3.
+1. ~~Name and course edits on a screenshot are not flagged.~~ **Changed by the review (decided by the user):** OCR text that is
+   confident, agreed by a second read and clearly different now FAILS `name_match` / `course_match`; doubtful OCR is "could not be confirmed
+   – check manually". Details in "Review follow-up" above.
 2. An OCR-read roll number that does not match the QR ID is `not_confirmed`, not `fail` (OCR turns S into 5, C-011).
 3. "Not checked" when none of name, course and marks could be compared, or when at least half of the applicable checks are `not_confirmed`
    (the plan only says "a minority" is tolerated; "at least half" is my reading).
 4. Any `fail` wins, even with NPTEL unreachable (an edited text layer is detected without NPTEL).
 5. `metadata` fails if ANY earlier Producer left behind by an incremental update is on the denylist, not only the current one.
-6. The ModDate threshold (1 day) and the name/course bounds are uncalibrated (no genuine ModDate or genuine OCR difference exists).
+6. The ModDate threshold (1 day) and the name/course bounds are uncalibrated against a genuine DIFFERENCE (no genuine ModDate or genuine OCR
+   difference exists); the OCR bounds are anchored to 54 exact genuine reads (see the follow-up).
+7. A one- or two-letter difference in an OCR'd name or course (an OCR slip, or a one-letter forgery) is deliberately left as "check manually".
 
 **Remaining work:** none for Phase 4. Nothing calls `assessTampering` outside the dev page yet: wiring it into the run (Phase 7), the
 saved results and counts (Phase 6) and the CSV mapping (`Not checked` is written as `No tampering detected`, with the reason in Remarks) come later.
@@ -696,7 +746,7 @@ saved results and counts (Phase 6) and the CSV mapping (`Not checked` is written
 |---|---|---|---|
 | 1 | The basis is small: 2 genuine PDFs (2 sessions, 2 generators) and 1 genuine screenshot. Thresholds not calibrated on a genuine sample: ModDate gap, every denylist entry (only absence from G1 and G2 is known), the name/course OCR bounds, the linearized baseline, and the `/noc/E_Certificate/` roll-prefix rule (one genuine sample). Collect 5 to 10 more genuine certificates, with at least one carrying a ModDate | High | Phase 10 pilot |
 | 2 | False-positive risks that no sample can rule out: NPTEL changes generator between sessions and its 2026 file looks post-processed, so a future genuine file could carry a denylisted tool (for example Acrobat) or be digitally signed (a signature is an incremental update). Unknown Producers never flag, so a NEW editor evades the denylist | High | Phase 10 pilot |
-| 3 | A changed NAME or COURSE on a screenshot or JPG is not flagged (decision 1), and Verification only compares marks. A forged image with the right marks and another name passes every check | High | Phase 10 pilot |
+| 3 | ~~A changed NAME or COURSE on a screenshot is not flagged~~ **Closed by the review**: a clearly different, confidently and consistently read name or course fails. What remains open: a one- or two-letter edit (could be an OCR slip) is only "check manually", and an edit made so cleanly that OCR reads it with low confidence is `not_confirmed`. Verification itself still compares only marks, so the name check lives in the tampering verdict | Medium | Phase 10 pilot |
 | 4 | Each PDF costs about 0.6 to 0.7 s warm (0.8 to 1.1 s cold) for the render OCR. In a 100-PDF batch that is over a minute | Medium | Phase 7 |
 | 5 | `layer_vs_render` needs the page layout the OCR understands (printed boilerplate and the 4-cell table with borders). Other layouts give `not_confirmed`, so they are not checked, never flagged | Medium | Phase 10 pilot |
 | 6 | The OCR time budget is wall-clock: on a slow or busy device it fires (C-018, reproduced by running 3 browsers in parallel). Phase 7's 3 to 4 certificates at once must be measured; the budget or the concurrency may have to adapt | Medium | Phase 7 |
@@ -704,7 +754,119 @@ saved results and counts (Phase 6) and the CSV mapping (`Not checked` is written
 | 8 | A PDF with an incremental update, or a Producer on the denylist, is flagged even if the content is untouched. By design, but an honest edit (for example adding an annotation) would be flagged too | Low | None |
 | 9 | The e2e suite needs the gitignored `samples/` and the NPTEL-served 2025 PDF in `samples/derived/`, and runs with one worker (about 2 minutes) | Low | None |
 | 10 | The OCR crop-size change was verified on the two genuine PDFs at 3,200 px and on the 1054 px images, not on large phone photos | Low | Phase 10 pilot |
-| 11 | `CLAUDE.md` "Known facts" still says the Jul to Sep 2026 sample has no Producer; NOTES.md §1.1 and §6 record that it has `MuPDF 1.28.2` in a Catalog-level Info dictionary | Low | None |
+| 11 | ~~`CLAUDE.md` Known facts said the 2026 sample has no Producer~~ **Fixed** in the review: it records `MuPDF 1.28.2` (Catalog-level Info), no dates, and the correct "Jan–Feb 2025" session | Low | None |
+| 12 | The second OCR read of the name and course (needed for the agreement rule) costs about 0.4 to 0.45 s for EVERY image extraction and for every PDF's render check, even when the first read matches NPTEL. It could be done lazily, only when the first read disagrees with NPTEL's value (that needs the NPTEL value before the second read) | Medium | Phase 7 |
+| 13 | The confidence (85), edit-distance (3) and ratio (0.15) bounds for OCR'd text rest on one name and two courses (54 reads of 9 files from 2 certificates, repeated reads of identical bytes are not independent). Collect more genuine certificates with other names, scripts (Devanagari is not read by the English OCR) and longer courses | High | Phase 10 pilot |
+| 14 | The dev page's source-map box can be reset by a hot reload between filling it and choosing a file (it made two measurement runs report "No NPTEL source"). The e2e helper and the measurement script now check the box before choosing files | Low | None |
+
+---
+
+## Phase 5 — Authentication
+
+**Status:** code complete, tests green locally; **awaiting the user's manual test on the `git-temp` Preview** (Google sign-in, the
+refusal of a non-PICT account, email sign-up/verification/reset with real Resend mail). Not deployed by me (rule 13).
+
+**Branch:** `temp` (rule 14). **Before starting:** the Phase 4 review follow-up is still UNCOMMITTED in the working tree (13 files:
+`CLAUDE.md`, `NOTES.md`, `compare.js`, `tamper/*`, `extract/*`, their tests…). Remote `temp` is `65d6107`. Commit it separately first.
+
+**The three layers of the `@pict.edu` rule:**
+1. `hd=pict.edu` hint on the Google authorize request (`src/lib/auth/auth.js`): filters the chooser, never trusted.
+2. Sign-in decision (`src/lib/auth/googleSignIn.js`, called from the Auth.js `signIn` callback): Google must say `email_verified === true`
+   and the address must be exactly `@pict.edu` after the single `@` (`src/lib/auth/domain.js`). A refusal writes `login_rejected_domain`
+   to `audit_logs` with the attempted address and IP. Disabled account refused. Any error refuses (fail closed).
+3. `requireUser()` / `requireAdmin()` (`src/lib/auth/guards.js`, rules in pure `access.js`): on EVERY request, re-reads the user from the
+   database and re-checks domain (strict, canonical), disabled flag and verified email. A disabled or off-domain user loses all sessions.
+   No session 401; domain/disabled/unverified 403; DB or config error 503.
+
+**Completed features** (all new, `src/lib/auth/` unless noted):
+- `auth.js`: Auth.js v5 config, MongoDB adapter, **database sessions** (7 days, refreshed daily), Google provider, events for audit.
+  Built lazily per request so builds need no secrets. `app/api/auth/[...nextauth]/route.js`.
+- Email/password is NOT an Auth.js provider (its Credentials provider cannot make database sessions); it is `flows.js` (pure,
+  tested against an in-memory DB) behind `app/api/auth/account/{signup,login,verify-email,forgot-password,reset-password}/route.js`
+  (shared wrapper `accountRoute.js`; cross-site `Origin` check, JSON only, 4 KB body limit, generic 503 on any failure). Sessions are
+  written in the adapter's own shape (`session.js`), so `requireUser()` has one code path.
+- Passwords: 10+ characters, at most 72 bytes (bcrypt's limit), a common-password list (`commonPasswords.js`, also checked with trailing
+  digits/punctuation stripped), must not contain the email's local part; bcrypt cost 12 (`password.js`).
+- Tokens (`tokens.js`): 32 random bytes, only the SHA-256 is stored, single use by atomic `findOneAndDelete`; verification 24 h, reset
+  1 h; a new token replaces the old. A reset link is checked first without being used, so a rejected weak password does not burn it.
+- Non-enumeration: sign-up, sign-in and forgot-password answer identically for known and unknown addresses; a bcrypt comparison always
+  runs; sign-up on an existing verified address sends an "already have an account" email. Login is refused until the email is verified.
+  A password reset ends every session of the account.
+- Throttling (`rateLimit.js`, values in `config.js`): per IP and per email in `rate_limits` (fixed windows, unique index); a database
+  error refuses. Limits: sign-up 10/h per IP and 3/h per email; login 20 per 15 min per IP and 8 per 15 min per email; forgot 10/h and 3/h; verify 30/h; reset 20/h.
+- Account linking: only for the same verified `@pict.edu` address. Pre-hijack defence: before a Google account is linked, an
+  unverified password signup for that address loses its password (`dropUnverifiedPassword`).
+- Email (`email.js`): Resend through plain `fetch` (10 s timeout), links built from `AUTH_URL`, never from the Host header. Dev/test stub
+  writes `tmp/mail-outbox.jsonl` only when `AUTH_EMAIL_STUB=1` AND `NODE_ENV` is not `production` AND `VERCEL` is unset.
+- `proxy.js` (**Next.js 16 renamed `middleware.js` to `proxy.js`**): protects `/dashboard`, `/history`, `/admin`, `/api/*` except
+  `/api/auth/*` and `/api/health`. It only checks that a session cookie exists (401 for the API, redirect to `/login?next=` for pages);
+  the real decision is `requireUser()`. `redirect.js` `safeNext` ignores off-site, protocol-relative, backslash and auth-page targets.
+- Pages in `app/(auth)/`: `/login` (Google button + email form), `/signup`, `/verify-email` (opening the link does nothing; a button
+  POSTs, so mail scanners cannot use the token), `/forgot-password`, `/reset-password`; `src/components/auth/`. Styled per DESIGN.md.
+- `app/dashboard/page.js`: a **placeholder** (signed-in email + sign out). The narrowest build-ahead (rule 8): there had to be somewhere
+  to land and something to prove the protection. The real dashboard is Phase 7.
+- **Phase 3 guard removed:** `src/lib/verify/guard.js` deleted; `app/api/verify/route.js` calls `requireUser()` first (before reading the
+  body). `VERIFY_DEV_ENDPOINT` is gone from code, `.env.example` and README.
+- Indexes (`src/lib/db/indexes.js`), needed before any account exists (Phase 1 known issue 4): `users.email` unique (case-insensitive
+  collation), `sessions.sessionToken` unique + `expires` TTL + `userId`, `accounts` provider/providerAccountId unique + `userId`,
+  `email_tokens.tokenHash` unique + `userId,type` + `expiresAt` TTL, `rate_limits` `key,windowStart` unique. `npm run db:indexes` was
+  run: "18 indexes ensured on database vericert".
+- `smoke:nptel` with `SMOKE_SESSION_COOKIE` (see README "Refreshing SMOKE_SESSION_COOKIE"): a real session cookie sent as `Cookie`
+  beside the bypass header; never printed; 401/403 reports "refresh SMOKE_SESSION_COOKIE". No Preview-only login and no second auth path.
+
+**Dependencies (exact versions):** added `next-auth@5.0.0-beta.32` (v5 is still a beta; pinned), `@auth/mongodb-adapter@3.11.3`,
+`bcryptjs@3.0.3`. **Changed `mongodb` 7.8.0 → 6.22.0** (adapter peer range; C-020). `npm audit --omit=dev`: 0 vulnerabilities.
+
+**Files modified (earlier phases):** `app/api/verify/route.js`, `src/lib/db/indexes.js`, `scripts/smoke-nptel.mjs`,
+`playwright.config.js`, `e2e/verify.spec.js`, `e2e/tamper.spec.js`, `app/dev/tamper/TamperScratch.js` (comment), `README.md`,
+`.env.example`, `tests/unit/{verifyRoute,indexes,smokeScript}.test.js`.
+
+**Tests:**
+- Vitest: 442 passed in 14 files (356 in 11 before): `auth.domain` (valid, upper case, padding, `+` alias, look-alikes
+  `@pict.edu.x.com` / `@notpict.edu` / subdomain / `pict.edu@gmail.com` / double `@` / Cyrillic homoglyph, Google profile
+  rules, open-redirect cases), `auth.flows` (22: non-enumeration, throttling, single-use and expiry, pre-hijack, sessions ended on reset,
+  fail closed), `auth.guards` (no session, wrong/look-alike domain, disabled, unverified, DB and config errors, admin, page redirect,
+  stub safety), `verifyRoute` (401/403/503 before any work, no environment switch, guard file deleted), `indexes`, `smokeScript` (cookie
+  never printed; the `.env` secrets appear in no tracked or non-ignored file).
+- Playwright (`workers: 1`): 49 tests (44 before; 5 new in `e2e/auth.spec.js`). The last COMPLETE run took 3.0 min and gave 48 passed,
+  1 failed: the LIVE tamper test, which needed a sign-in after the guard change. After that fix I ran `e2e/auth.spec.js` +
+  `e2e/verify.spec.js` (9 passed, 31 s) and the LIVE test alone (passed), but the final full run was stopped by the system for low memory,
+  so there is **no single green run of all 49 after the last edit**; please rerun `npm run test:e2e`. The server is started by Playwright against `<MONGODB_DB>_test` (dropped before and after, refuses
+  any name not ending in `_test`) with the email stub on. New `e2e/auth.spec.js`: sign up → refused before confirming → confirm →
+  sign in → sign out → protected page redirects → reset (link works once) → old password refused → new works; non-PICT sign-up
+  refused; `/api/verify` 401 without a session; `next=https://evil…` ignored.
+- Lint clean. Build passes. **Production start with no database or auth variables:** `/dashboard` 307 to `/login`, `/api/verify` 401
+  without a cookie and 503 with a forged cookie, the login route 503, `/dev/extract` 404.
+
+**Not tested here (needs the user, see the checklist):** the Google round trip, real Resend delivery, behaviour behind Vercel's
+Deployment Protection. The unit tests cover the decision logic; the live OAuth flow has not been run by me.
+
+**Decisions to review (rule 11):**
+1. `proxy.js` instead of `middleware.js` (Next 16). Cookie-presence check only; authorisation is `requireUser()`.
+2. Credentials sign-in through our own routes rather than Auth.js' Credentials provider (database sessions).
+3. `mongodb` 7.8.0 → 6.22.0; `next-auth` is a beta.
+4. Atlas is shared by every environment (one `MONGODB_DB`): a session created on Preview is a row in the same `sessions` collection as
+   Production, but cookies are per origin and each environment has its own `AUTH_SECRET`/`AUTH_URL`. The e2e suite uses a separate `_test` database.
+5. Residual risk, accepted: an unverified password signup is dropped when the real owner signs in with Google (pre-hijack), but between
+   the sign-up and that sign-in the address holds an unverified row. It can never sign in without the emailed link.
+6. The audit `action` values added by this phase: `login`, `logout`, `login_rejected`, `login_rejected_domain`, `signup`,
+   `email_verified`, `password_reset_requested`, `password_reset`, `session_rejected`.
+
+**Changes to earlier phases:** Phase 3's temporary `/api/verify` guard and `VERIFY_DEV_ENDPOINT` are removed (Phase 3 known issue 2 closed).
+**Action for the user:** delete `VERIFY_DEV_ENDPOINT` from Vercel (Preview) once this code is deployed. It does nothing any more.
+
+**Remaining work:** Phase 6 (persistence and history), then the real dashboard. `/history` and `/admin` are protected by the proxy but
+have no pages yet.
+
+**Known issues / TODOs:**
+| # | Item | Priority | Blocking |
+|---|---|---|---|
+| 1 | Google OAuth, real email delivery and Vercel-protected Preview were not exercised by me | High | Approval |
+| 2 | `onboarding@resend.dev` can only deliver to the Resend account owner's address; other users need a verified domain (Phase 3 plan, item 3) | Medium | Phase 10 |
+| 3 | The proxy cannot read the database, so a revoked cookie still reaches the route, where `requireUser()` refuses it (by design) | Low | None |
+| 4 | Email change, account deletion and an admin "disable user" screen are not built | Low | Phase 8 |
+| 5 | The LIVE tamper test calls real NPTEL and failed once (verification `Error`) before the final fix and passed on rerun; not investigated | Low | None |
+| 6 | The tested rate-limit numbers are chosen, not measured against real traffic | Low | Phase 8 |
 
 ---
 

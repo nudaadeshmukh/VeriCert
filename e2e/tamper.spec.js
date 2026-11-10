@@ -6,7 +6,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { buildImagePdf, drawCertificate, hiddenLayer } from './helpers/syntheticCertificate.js';
+import { registerAndLogin } from './helpers/auth.js';
+import {
+  buildImagePdf,
+  drawCertificate,
+  editScreenshot,
+  hiddenLayer,
+} from './helpers/syntheticCertificate.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const SAMPLES = path.join(ROOT, 'samples');
@@ -30,7 +36,12 @@ const nptel = (e) => ({
  */
 async function assess(page, file, sourceMap = {}, query = '') {
   await page.goto(`/dev/tamper${query}`);
-  await page.getByTestId('source-map').fill(JSON.stringify(sourceMap));
+  const json = JSON.stringify(sourceMap);
+  // The dev page can hot-reload after a file edit and reset the box: make sure the source is in before choosing the file.
+  await expect(async () => {
+    await page.getByTestId('source-map').fill(json);
+    await expect(page.getByTestId('source-map')).toHaveValue(json);
+  }).toPass({ timeout: 15_000 });
   await page.getByTestId('file-input').setInputFiles(file);
   await page.getByTestId('status').filter({ hasText: 'done' }).waitFor({ timeout: 120_000 });
   const name = typeof file === 'string' ? path.basename(file) : file.name;
@@ -123,6 +134,7 @@ test.describe('GENUINE samples: every one must give "No tampering detected"', ()
   test('LIVE: the chain end to end with the real /api/verify (real NPTEL) on the genuine 2026 PDF', async ({
     page,
   }) => {
+    await registerAndLogin(page.request); // /api/verify needs a signed-in user (Phase 5); the page shares this session
     const r = await assess(page, path.join(SAMPLES, G1), {}, '?live=1');
     expect(r.verification.verdict).toBe('Successful');
     expect(r.tamper.verdict).toBe('No tampering detected');
@@ -169,6 +181,56 @@ test.describe('KNOWN-TAMPERED sample', () => {
     );
     expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('Tampering detected');
     expect(r.tamper.failing).toContain('marks_match');
+  });
+});
+
+test.describe('FORGED NAME or COURSE on a real genuine screenshot (marks untouched)', () => {
+  test.skip(!haveReal, 'samples/ and samples/expected.local.json are not present');
+  const genuine = () => fs.readFileSync(path.join(SAMPLES, 'NPTEL.png'));
+  const forged = async (page, edit, name) => {
+    await page.goto('/dev/tamper');
+    const png = await editScreenshot(page, genuine(), edit);
+    return assess(
+      page,
+      { name, mimeType: 'image/png', buffer: png },
+      { [name]: nptel(expected['NPTEL.png']) },
+    );
+  };
+
+  test('control: the same repaint with the ORIGINAL name written back is not flagged', async ({ page }) => {
+    const r = await forged(page, { name: expected['NPTEL.png'].name }, 'same-name.png');
+    expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('No tampering detected');
+    expect(outcomes(r).name_match).toBe('pass');
+  });
+
+  test("a classmate's name painted over the genuine one: Tampering detected, naming name_match only", async ({
+    page,
+  }) => {
+    const r = await forged(page, { name: 'PRIYA ANIL DESHPANDE' }, 'forged-name.png');
+    expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('Tampering detected');
+    expect(r.tamper.failing).toEqual(['name_match']);
+    const detail = r.tamper.checks.find((c) => c.id === 'name_match').detail;
+    expect(detail).toContain(`NPTEL: "${expected['NPTEL.png'].name}"`); // both names side by side
+    expect(detail).toMatch(/Certificate: "[^"]+" \| NPTEL: "/);
+    expect(outcomes(r)).toMatchObject({ course_match: 'pass', marks_match: 'pass' });
+    expect(r.verification.verdict).toBe('Successful'); // Verification compares marks only; tampering is what catches this
+  });
+
+  test('a different course painted over the genuine one: Tampering detected, naming course_match only', async ({
+    page,
+  }) => {
+    const r = await forged(page, { course: 'Introduction to Machine Learning' }, 'forged-course.png');
+    expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('Tampering detected');
+    expect(r.tamper.failing).toEqual(['course_match']);
+  });
+
+  test('name and course both forged: both are named', async ({ page }) => {
+    const r = await forged(
+      page,
+      { name: 'PRIYA ANIL DESHPANDE', course: 'Introduction to Machine Learning' },
+      'forged-both.png',
+    );
+    expect(r.tamper.failing).toEqual(['name_match', 'course_match']);
   });
 });
 
@@ -320,6 +382,52 @@ test.describe('synthetic fixtures (committed or generated, nothing real)', () =>
         { 'sejda.pdf': truth },
       );
       expect(r.tamper.failing).toEqual(['metadata']);
+    });
+  });
+
+  test.describe('EDITED NAME on an IMAGE (synthetic, anonymised)', () => {
+    const owner = {
+      name: 'MEERA SUNIL JOSHI',
+      course: 'Data Analytics with Python',
+      assignment: '25/25',
+      exam: '66/75',
+    };
+    const nptelValues = {
+      source: { name: owner.name, course: owner.course, assignment: 25, exam: 66, total: null },
+    };
+    const asPng = (jpeg, name) => ({ name, mimeType: 'image/jpeg', buffer: jpeg });
+
+    test("control: the owner's own image is not flagged, and the details show both names", async ({
+      page,
+    }) => {
+      await page.goto('/dev/tamper');
+      const jpeg = await drawCertificate(page, owner);
+      const r = await assess(page, asPng(jpeg, 'owner.jpg'), { 'owner.jpg': nptelValues });
+      expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('No tampering detected');
+      expect(r.tamper.checks.find((c) => c.id === 'name_match').detail).toBe(
+        'Name matches NPTEL. Certificate: "MEERA SUNIL JOSHI" | NPTEL: "MEERA SUNIL JOSHI"',
+      );
+    });
+
+    test("the classmate's name drawn on the owner's certificate: Tampering detected, naming name_match", async ({
+      page,
+    }) => {
+      await page.goto('/dev/tamper');
+      const jpeg = await drawCertificate(page, { ...owner, name: 'PRIYA ANIL DESHPANDE' });
+      const r = await assess(page, asPng(jpeg, 'forged.jpg'), { 'forged.jpg': nptelValues });
+      expect(r.tamper.verdict, JSON.stringify(r.tamper.checks)).toBe('Tampering detected');
+      expect(r.tamper.failing).toEqual(['name_match']);
+      expect(r.tamper.reason).toContain('Certificate: "PRIYA ANIL DESHPANDE" | NPTEL: "MEERA SUNIL JOSHI"');
+    });
+
+    test('a one-letter change is left for a manual check, not accused', async ({ page }) => {
+      await page.goto('/dev/tamper');
+      const jpeg = await drawCertificate(page, { ...owner, name: 'MEERA SUNIL JOSHY' });
+      const r = await assess(page, asPng(jpeg, 'oneletter.jpg'), { 'oneletter.jpg': nptelValues });
+      expect(r.tamper.failing).toEqual([]);
+      const c = r.tamper.checks.find((k) => k.id === 'name_match');
+      expect(c.outcome).toBe('not_confirmed');
+      expect(c.detail).toMatch(/^Name could not be confirmed – check manually/);
     });
   });
 

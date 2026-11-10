@@ -73,6 +73,46 @@ export function indexSpecs(retentionDays) {
       key: { windowStart: 1 },
       options: { name: 'windowStart_ttl', expireAfterSeconds: RATE_LIMIT_TTL_SECONDS },
     },
+    // Phase 5: needed BEFORE any account exists (Phase 1 known issue 4) and by the login throttle.
+    // rate_limits: one counter row per (key, window); the unique index makes concurrent first requests safe.
+    {
+      collection: 'rate_limits',
+      key: { key: 1, windowStart: 1 },
+      options: { name: 'key_windowStart', unique: true },
+    },
+    // users: one account per address, compared case-insensitively (strength 2). Addresses are also stored lower case.
+    {
+      collection: 'users',
+      key: { email: 1 },
+      options: { name: 'email_unique', unique: true, collation: { locale: 'en', strength: 2 } },
+    },
+    // sessions (Auth.js adapter): the lookup key, per-user revocation, and removal of expired sessions.
+    {
+      collection: 'sessions',
+      key: { sessionToken: 1 },
+      options: { name: 'sessionToken_unique', unique: true },
+    },
+    { collection: 'sessions', key: { userId: 1 }, options: { name: 'userId' } },
+    { collection: 'sessions', key: { expires: 1 }, options: { name: 'expires_ttl', expireAfterSeconds: 0 } },
+    // accounts (Auth.js adapter): one row per linked provider account.
+    {
+      collection: 'accounts',
+      key: { provider: 1, providerAccountId: 1 },
+      options: { name: 'provider_account_unique', unique: true },
+    },
+    { collection: 'accounts', key: { userId: 1 }, options: { name: 'userId' } },
+    // email_tokens (verification and reset links, stored hashed): lookup by hash, per-user replacement, and expiry.
+    {
+      collection: 'email_tokens',
+      key: { tokenHash: 1 },
+      options: { name: 'tokenHash_unique', unique: true },
+    },
+    { collection: 'email_tokens', key: { userId: 1, type: 1 }, options: { name: 'userId_type' } },
+    {
+      collection: 'email_tokens',
+      key: { expiresAt: 1 },
+      options: { name: 'expiresAt_ttl', expireAfterSeconds: 0 },
+    },
   ];
 }
 

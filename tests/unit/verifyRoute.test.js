@@ -1,5 +1,19 @@
+import { NextResponse } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isVerifyEndpointEnabled } from '../../src/lib/verify/guard.js';
+
+// requireUser() is the real gatekeeper (tested in auth.guards.test.js); here it is a stand-in whose answer each test chooses.
+const requireUser = vi.fn();
+vi.mock('../../src/lib/auth/guards.js', () => ({ requireUser: () => requireUser() }));
+const SIGNED_IN = {
+  ok: true,
+  user: { id: '64b0c0ffee0000000000abcd', email: 'staff@pict.edu', name: null, role: 'user' },
+};
+const refused = (status, code) => ({
+  ok: false,
+  status,
+  code,
+  response: NextResponse.json({ error: code }, { status }),
+});
 
 const verifySource = vi.fn();
 vi.mock('../../src/lib/verify/index.js', async (orig) => ({
@@ -17,51 +31,59 @@ const ok = {
 
 beforeEach(() => {
   verifySource.mockReset();
+  requireUser.mockReset();
+  requireUser.mockResolvedValue(SIGNED_IN);
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 afterEach(() => vi.unstubAllEnvs());
 
-describe('isVerifyEndpointEnabled (temporary guard; Phase 5 removes it)', () => {
-  it('is enabled outside production (dev, tests)', () => {
-    expect(isVerifyEndpointEnabled({ NODE_ENV: 'development' })).toBe(true);
-    expect(isVerifyEndpointEnabled({ NODE_ENV: 'test' })).toBe(true);
+describe('POST /api/verify requires a user (Phase 5: the Phase 3 dev-only guard is gone)', () => {
+  const body = JSON.stringify({ url: 'https://nptel.ac.in/verify/NOC-TEST-FIXT-URE01' });
+
+  it.each([
+    [401, 'no_session'],
+    [403, 'domain_not_allowed'],
+    [403, 'account_disabled'],
+    [403, 'email_not_verified'],
+    [503, 'service_unavailable'],
+  ])('answers %i (%s) and does no work', async (status, code) => {
+    requireUser.mockResolvedValue(refused(status, code));
+    const res = await post(body);
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: code });
+    expect(verifySource).not.toHaveBeenCalled();
   });
-  it('is DISABLED in production by default', () => {
-    expect(isVerifyEndpointEnabled({ NODE_ENV: 'production' })).toBe(false);
-    expect(isVerifyEndpointEnabled({ NODE_ENV: 'production', VERCEL_ENV: 'production' })).toBe(false);
+
+  it('checks the session BEFORE it reads or validates the body', async () => {
+    requireUser.mockResolvedValue(refused(401, 'no_session'));
+    expect((await post('this is not json')).status).toBe(401);
+    expect((await post(JSON.stringify({ url: 'x', pad: 'y'.repeat(3000) }))).status).toBe(401); // not 413
   });
-  it('is enabled on a Vercel Preview only with VERIFY_DEV_ENDPOINT=1', () => {
-    const preview = { NODE_ENV: 'production', VERCEL_ENV: 'preview' };
-    expect(isVerifyEndpointEnabled(preview)).toBe(false);
-    expect(isVerifyEndpointEnabled({ ...preview, VERIFY_DEV_ENDPOINT: '1' })).toBe(true);
-    expect(isVerifyEndpointEnabled({ ...preview, VERIFY_DEV_ENDPOINT: 'true' })).toBe(false);
-    expect(isVerifyEndpointEnabled({ ...preview, VERIFY_DEV_ENDPOINT: '0' })).toBe(false);
+
+  it('has no environment switch: NODE_ENV and VERIFY_DEV_ENDPOINT make no difference', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VERIFY_DEV_ENDPOINT', '1');
+    vi.stubEnv('VERCEL_ENV', 'preview');
+    requireUser.mockResolvedValue(refused(401, 'no_session'));
+    expect((await post(body)).status).toBe(401);
+    requireUser.mockResolvedValue(SIGNED_IN);
+    verifySource.mockResolvedValue(ok);
+    expect((await post(body)).status).toBe(200);
   });
-  it('setting VERIFY_DEV_ENDPOINT on PRODUCTION (or an unknown environment) does not open it', () => {
-    expect(
-      isVerifyEndpointEnabled({ NODE_ENV: 'production', VERCEL_ENV: 'production', VERIFY_DEV_ENDPOINT: '1' }),
-    ).toBe(false);
-    expect(isVerifyEndpointEnabled({ NODE_ENV: 'production', VERIFY_DEV_ENDPOINT: '1' })).toBe(false); // `next start`
-    expect(
-      isVerifyEndpointEnabled({
-        NODE_ENV: 'production',
-        VERCEL_ENV: 'development',
-        VERIFY_DEV_ENDPOINT: '1',
-      }),
-    ).toBe(false);
+
+  it('the Phase 3 stop-gap is deleted', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    expect(fs.existsSync(path.resolve(import.meta.dirname, '../../src/lib/verify/guard.js'))).toBe(false);
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../app/api/verify/route.js'), 'utf8');
+    expect(src).not.toMatch(/isVerifyEndpointEnabled|guard\.js/);
+    expect(src.replace(/\/\/.*$/gm, '')).not.toMatch(/VERIFY_DEV_ENDPOINT/); // only the comment mentions it
   });
 });
 
 describe('POST /api/verify', () => {
   it('maxDuration fits the 20 s verification budget and the Hobby limit', () => {
     expect(maxDuration).toBe(30);
-  });
-
-  it('is a 404 with no work done when the guard says no', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    const res = await post(JSON.stringify({ url: 'https://nptel.ac.in/verify/NOC-TEST-FIXT-URE01' }));
-    expect(res.status).toBe(404);
-    expect(verifySource).not.toHaveBeenCalled();
   });
 
   it('returns the verification result as JSON, uncached', async () => {

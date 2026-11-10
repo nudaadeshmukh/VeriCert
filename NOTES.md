@@ -218,3 +218,21 @@ shown an OCR difference.
   (no genuine linearized file); the ID rule for `/noc/E_Certificate/` (one genuine sample).
 - `NPTEL_tampered.png` carries an XMP `tiff:Orientation` chunk the genuine PNG lacks (§1.3). Still **not** used: two PNGs
   are not enough, and any re-save by an image editor adds it.
+
+### 6.4 OCR'd names and courses on genuine samples (measured 2026-11-10, before the OCR text thresholds were set)
+6 reads each of 9 files, all derived from the two genuine certificates, with the identity crop read twice at different scales
+(the agreement rule). Edit distance is to NPTEL's text after normalisation (NFC, case, punctuation).
+| Genuine source | Reads | Name and course exact | Two reads agreed (name / course) | Lowest confidence (name / course) | Largest edit distance |
+|---|---|---|---|---|---|
+| G3 screenshot | 6 | 6 / 6 | 6 / 6 | 92 / 94 | 0 / 0 |
+| tampered screenshot, name untouched | 6 | 6 / 6 | 6 / 6 | 92 / 94 | 0 / 0 |
+| G3 as JPEG, quality 95, 85, 75 (3 files) | 18 | 18 / 18 | 18 / 18 | 92 / 94 | 0 / 0 |
+| 2025 PDF rendered to a 1054 px image | 6 | 6 / 6 | 6 / 6 | 93 / 94 | 0 / 0 |
+| 2026 PDF rendered to a 1054 px image | 6 | 6 / 6 | 6 / 6 | 92 / 95 | 0 / 0 |
+| G1 PDF page render (evidence OCR) | 6 | 6 / 6 | 6 / 6 | 92 / 96 | 0 / 0 |
+| G2 PDF page render (evidence OCR) | 6 | 6 / 6 | 6 / 6 | 92 / 94 | 0 / 0 |
+**54 of 54 reads exact, 54 of 54 agreed, confidence never below 92 (names) or 94 (courses).** Honest limits: this is one name and two
+course titles, and repeating identical bytes is not independent sampling (OCR is deterministic). The thresholds in `config.js`
+(`OCR_TEXT_MIN_CONFIDENCE` 85, `OCR_TEXT_MIN_EDIT_DISTANCE` 3, `OCR_TEXT_MIN_DIFFERENCE_RATIO` 0.15) sit below every genuine read's
+confidence and above every OCR error seen anywhere in the project (all single characters), but have never been tested against a genuine
+difference, because none exists.

@@ -1,15 +1,15 @@
 // POST /api/verify  { url }  →  { source: { name, course, assignment, exam, total } | null,
 //                                  error?, message?, meta: { shape, ms, requests } }
 //
-// TEMPORARILY UNAUTHENTICATED (Phase 3). It is reachable only where `isVerifyEndpointEnabled()` says
-// so: local dev, or a Vercel Preview with VERIFY_DEV_ENDPOINT=1. Phase 5 removes that guard and adds
-// `requireUser()`; see docs/progress.md.
+// AUTHENTICATED (Phase 5): `requireUser()` runs first, on every request: no session is 401, a disabled, unverified or
+// non-@pict.edu account is 403, and an error in the check is 503. The Phase 3 stop-gap (a dev-only guard and the
+// VERIFY_DEV_ENDPOINT variable) is gone.
 //
 // The server fetches only nptel.ac.in / *.nptel.ac.in (checked on every redirect hop), reads
 // NPTEL's own certificate PDF and returns the parsed fields. It never returns the PDF.
 import { NextResponse } from 'next/server';
+import { requireUser } from '../../../src/lib/auth/guards.js';
 import { createDeduper, verifySource } from '../../../src/lib/verify/index.js';
-import { isVerifyEndpointEnabled } from '../../../src/lib/verify/guard.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,9 +28,8 @@ const reject = (error, message, status) =>
   NextResponse.json({ source: null, error, message, meta: { ms: 0 } }, { status, headers: NO_STORE });
 
 export async function POST(request) {
-  if (!isVerifyEndpointEnabled()) {
-    return new NextResponse(null, { status: 404, headers: NO_STORE }); // pretend it does not exist
-  }
+  const guard = await requireUser();
+  if (!guard.ok) return guard.response;
 
   const declared = Number(request.headers.get('content-length') ?? 0);
   if (declared > MAX_BODY_BYTES) return reject('invalid_request', 'Request body too large', 413);

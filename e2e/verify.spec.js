@@ -1,11 +1,17 @@
 // POST /api/verify, refusals only: none of these reach NPTEL, so they run anywhere. The LIVE test
 // (real NPTEL, both URL shapes) is `npm run smoke:nptel`, which is deliberately not part of this suite.
 import { expect, test } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth.js';
 
 const post = (request, data) =>
   request.post('/api/verify', { data, headers: { 'content-type': 'application/json' } });
 
-test.describe('POST /api/verify (dev server: endpoint enabled)', () => {
+test.describe('POST /api/verify (signed in)', () => {
+  test.skip(Boolean(process.env.PLAYWRIGHT_BASE_URL), 'needs the local server with the email stub');
+  test.beforeEach(async ({ request }) => {
+    await registerAndLogin(request);
+  });
+
   test('a non-NPTEL host is refused with 400 and no source', async ({ request }) => {
     const res = await post(request, { url: 'https://evil.example/verify/NOC-AAAA-BBBB-CCCCC' });
     expect(res.status()).toBe(400);

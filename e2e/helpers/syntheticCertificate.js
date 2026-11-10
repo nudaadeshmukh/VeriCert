@@ -64,6 +64,50 @@ export async function drawCertificate(page, v) {
   return Buffer.from(b64, 'base64');
 }
 
+/**
+ * Edit a REAL certificate screenshot the way a forger would: paint over the name (or the course) with the page's white and
+ * write another one in a similar font. Runs in the browser; the pixels never leave it. Local-only tests use it on the genuine
+ * screenshot (nothing real is committed).
+ *
+ * Positions are those of the 1054 x 759 NPTEL screenshot: the name is centred on x = 527 at y = 214, the course at y = 302.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {Buffer} png the genuine screenshot
+ * @param {{ name?: string, course?: string }} edit
+ * @returns {Promise<Buffer>} PNG
+ */
+export async function editScreenshot(page, png, edit) {
+  const b64 = await page.evaluate(
+    async ({ b64, edit }) => {
+      const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+      const c = document.createElement('canvas');
+      c.width = bitmap.width;
+      c.height = bitmap.height;
+      const g = c.getContext('2d');
+      g.drawImage(bitmap, 0, 0);
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = '#fff';
+      if (edit.name) {
+        g.fillRect(380, 202, 290, 26);
+        g.fillStyle = '#000';
+        g.font = 'bold 15px Arial, sans-serif';
+        g.fillText(edit.name, 527, 214);
+      }
+      if (edit.course) {
+        g.fillStyle = '#fff';
+        g.fillRect(340, 287, 374, 30);
+        g.fillStyle = '#000';
+        g.font = 'bold 22px Georgia, serif';
+        g.fillText(edit.course, 527, 302);
+      }
+      return c.toDataURL('image/png').split(',')[1];
+    },
+    { b64: png.toString('base64'), edit },
+  );
+  return Buffer.from(b64, 'base64');
+}
+
 /** @param {string} s */
 const esc = (s) => s.replace(/[\\()]/g, (ch) => `\\${ch}`);
 

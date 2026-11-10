@@ -243,7 +243,18 @@ const TL = {
   assignment: 22.5,
   exam: 61.88,
 };
-const OCR = { ...TL, confidence: { name: 93, course: 94 }, errors: [] };
+const OCR = {
+  ...TL,
+  confidence: { name: 93, course: 94 },
+  agreement: { name: true, course: true },
+  errors: [],
+};
+/** An OCR read of the name only, with its confidence and whether the two reads agreed. */
+const ocrName = (name, confidence = 93, agreed = true) => ({
+  name,
+  confidence: { name: confidence },
+  agreement: { name: agreed },
+});
 
 describe('layer_vs_render check', () => {
   const run = (tl, ocr) => layerVsRenderCheck(evidence(tl, ocr), 'pdf');
@@ -265,7 +276,7 @@ describe('layer_vs_render check', () => {
     expect(run({ ...TL, assignment: 22.52 }, OCR).outcome).toBe('fail');
   });
   it('FAILS on a clearly different, confidently read name', () => {
-    const c = run({ ...TL, name: 'SOMEONE TOTALLY DIFFERENT' }, OCR);
+    const c = run({ ...TL, name: 'SOMEONE TOTALLY DIFFERENT' }, OCR); // OCR: confidence 93, the two reads agreed
     expect(c.outcome).toBe('fail');
     expect(c.detail).toContain('name: text layer "SOMEONE TOTALLY DIFFERENT", render "ASHA RAMESH KULKARNI"');
   });
@@ -273,22 +284,44 @@ describe('layer_vs_render check', () => {
     const c = run(TL, { ...OCR, name: 'ASHA RAMESH KULKARN' });
     expect(c.outcome).toBe('pass'); // marks and course confirmed
     expect(c.detail).toMatch(/not confirmed: name/);
-    const only = run({ name: TL.name }, { name: 'ASHA RAMESH KULKARN', confidence: { name: 93 } });
+    const only = run({ name: TL.name }, ocrName('ASHA RAMESH KULKARN'));
     expect(only.outcome).toBe('not_confirmed');
   });
   it('a clearly different name read at LOW confidence is not trusted', () => {
-    const c = run({ name: TL.name }, { name: 'ZZZZ QQQQ WWWW', confidence: { name: 60 } });
+    const c = run({ name: TL.name }, ocrName('ZZZZ QQQQ WWWW', 60));
     expect(c.outcome).toBe('not_confirmed');
+    expect(c.detail).toMatch(/confidence is low/);
+  });
+  it('a clearly different name whose two OCR reads DISAGREED is not trusted either', () => {
+    const c = run({ name: TL.name }, ocrName('ZZZZ QQQQ WWWW', 99, false));
+    expect(c.outcome).toBe('not_confirmed');
+    expect(c.detail).toMatch(/did not agree/);
   });
   it('the bounds are the ones in config.js', () => {
-    expect(config.LAYER_TEXT_MIN_OCR_CONFIDENCE).toBe(85);
-    expect(config.LAYER_TEXT_MIN_DIFFERENCE_RATIO).toBe(0.5);
-    const atBound = (conf) => run({ name: 'AAAAAAAAAA' }, { name: 'AAAAABBBBB', confidence: { name: conf } }); // ratio exactly 0.5
-    expect(atBound(85).outcome).toBe('fail');
-    expect(atBound(84).outcome).toBe('not_confirmed');
-    expect(run({ name: 'AAAAAAAAAA' }, { name: 'AAAAAABBBB', confidence: { name: 99 } }).outcome).toBe(
+    expect(config.OCR_TEXT_MIN_CONFIDENCE).toBe(85);
+    expect(config.OCR_TEXT_MIN_EDIT_DISTANCE).toBe(3);
+    expect(config.OCR_TEXT_MIN_DIFFERENCE_RATIO).toBe(0.15);
+    const at = (conf) => run({ name: 'AAAAAAAAAAAAAAAAAAAA' }, ocrName('AAAAAAAAAAAAAAAAABBB', conf)); // 3 of 20 = 0.15
+    expect(at(85).outcome).toBe('fail');
+    expect(at(84).outcome).toBe('not_confirmed');
+    // two characters of 20 (distance 2, ratio 0.1) stays unconfirmed however confident
+    expect(run({ name: 'AAAAAAAAAAAAAAAAAAAA' }, ocrName('AAAAAAAAAAAAAAAAAABB', 99)).outcome).toBe(
       'not_confirmed',
-    ); // 0.4
+    );
+    // three characters of 60 (distance 3, ratio 0.05): a long title is allowed a few OCR slips
+    const long = 'A'.repeat(60);
+    expect(
+      run(
+        { course: long },
+        { course: 'A'.repeat(57) + 'BBB', confidence: { course: 99 }, agreement: { course: true } },
+      ).outcome,
+    ).toBe('not_confirmed');
+    expect(
+      run(
+        { course: long },
+        { course: 'A'.repeat(50) + 'B'.repeat(10), confidence: { course: 99 }, agreement: { course: true } },
+      ).outcome,
+    ).toBe('fail');
   });
   it('unreadable OCR fields are not_confirmed, never a fail', () => {
     expect(run(TL, { ...OCR, assignment: null, exam: null, name: null, course: null }).outcome).toBe(
@@ -462,6 +495,67 @@ describe('the verdict', () => {
     expect(r.verdict).toBe('Tampering detected');
     expect(r.failing).toEqual(['marks_match']);
     expect(r.reason).toMatch(/^marks_match: Assignment marks on the certificate are 20/);
+  });
+
+  describe("a classmate's genuine image with only the NAME edited (the forgery gap)", () => {
+    // A screenshot: every field read by OCR, two reads agreed, confidence 93 and 94 (what genuine screenshots give).
+    const image = (over = {}) =>
+      cert({
+        fileKind: 'png',
+        source: 'ocr',
+        evidence: undefined,
+        ocrFields: ['name', 'course', 'assignment', 'exam', 'rollNo'],
+        ocrConfidence: { name: 93, course: 94 },
+        ocrAgreement: { name: true, course: true },
+        ...over,
+      });
+
+    it('the genuine image still gives No tampering detected', () => {
+      const r = assess(image());
+      expect(r.verdict).toBe('No tampering detected');
+      expect(outcomes(r)).toMatchObject({ name_match: 'pass', course_match: 'pass', marks_match: 'pass' });
+    });
+    it('a clearly different name, marks untouched: Tampering detected, naming name_match', () => {
+      const r = assess(image({ name: 'PRIYA ANIL DESHPANDE' }));
+      expect(r.verdict).toBe('Tampering detected');
+      expect(r.failing).toEqual(['name_match']);
+      expect(r.reason).toContain('Certificate: "PRIYA ANIL DESHPANDE" | NPTEL: "ASHA RAMESH KULKARNI"');
+    });
+    it('a clearly different course, marks untouched: Tampering detected, naming course_match', () => {
+      const r = assess(image({ course: 'Introduction to Machine Learning' }));
+      expect(r.failing).toEqual(['course_match']);
+    });
+    it('name, course and marks all edited: all three are named', () => {
+      const r = assess(
+        image({ name: 'PRIYA ANIL DESHPANDE', course: 'Cloud Computing Basics', assignment: 25, exam: 75 }),
+      );
+      expect(r.failing).toEqual(['name_match', 'course_match', 'marks_match']);
+    });
+    it('a doubtful OCR name is NOT tampering: not_confirmed with the manual-check wording', () => {
+      const r = assess(image({ name: 'PRIYA ANIL DESHPANDE', ocrConfidence: { name: 60, course: 94 } }));
+      expect(r.verdict).toBe('No tampering detected'); // one not_confirmed of five applicable is a tolerated minority
+      expect(outcomes(r).name_match).toBe('not_confirmed');
+      const detail = r.checks.find((c) => c.id === 'name_match').detail;
+      expect(detail).toMatch(/^Name could not be confirmed – check manually/);
+      expect(detail).toContain('NPTEL: "ASHA RAMESH KULKARNI"');
+      expect(r.reason).toContain('name_match');
+    });
+    it('a disagreeing pair of OCR reads is not tampering either', () => {
+      expect(
+        assess(image({ name: 'PRIYA ANIL DESHPANDE', ocrAgreement: { name: false, course: true } })).failing,
+      ).toEqual([]);
+    });
+    it('every check detail with both sides available shows both, side by side', () => {
+      for (const r of [
+        assess(image()),
+        assess(image({ name: 'PRIYA ANIL DESHPANDE' })),
+        assess(image({ name: 'ASHA RAMESH KULKARN' })),
+      ]) {
+        for (const id of ['name_match', 'course_match']) {
+          expect(r.checks.find((c) => c.id === id).detail).toMatch(/Certificate: ".+" \| NPTEL: ".+"/);
+        }
+      }
+    });
   });
 
   it('tampered metadata alone (marks agree with NPTEL) → Tampering detected, naming metadata', () => {

@@ -38,8 +38,41 @@ describe('indexSpecs', () => {
   it('only indexes metadata fields, never certificate content', () => {
     const fields = specs.flatMap((s) => Object.keys(s.key));
     expect(new Set(fields)).toEqual(
-      new Set(['userId', 'createdAt', 'runId', 'candidateName', 'windowStart']),
+      new Set([
+        'userId',
+        'createdAt',
+        'runId',
+        'candidateName',
+        'windowStart',
+        // Phase 5 (authentication): metadata only, no certificate content
+        'key',
+        'email',
+        'sessionToken',
+        'expires',
+        'provider',
+        'providerAccountId',
+        'tokenHash',
+        'type',
+        'expiresAt',
+      ]),
     );
+  });
+
+  it('Phase 5: accounts are unique per address (case-insensitive), sessions and tokens by their secret', () => {
+    const find = (c, n) => specs.find((s) => s.collection === c && s.options.name === n);
+    expect(find('users', 'email_unique').options).toMatchObject({
+      unique: true,
+      collation: { locale: 'en', strength: 2 },
+    });
+    expect(find('sessions', 'sessionToken_unique').options.unique).toBe(true);
+    expect(find('email_tokens', 'tokenHash_unique').options.unique).toBe(true);
+    expect(find('rate_limits', 'key_windowStart').options.unique).toBe(true);
+    expect(find('accounts', 'provider_account_unique').key).toEqual({ provider: 1, providerAccountId: 1 });
+  });
+  it('Phase 5: expired sessions and tokens are removed at their own expiry time', () => {
+    const find = (c, n) => specs.find((s) => s.collection === c && s.options.name === n);
+    expect(find('sessions', 'expires_ttl').options.expireAfterSeconds).toBe(0);
+    expect(find('email_tokens', 'expiresAt_ttl').options.expireAfterSeconds).toBe(0);
   });
 });
 

@@ -274,3 +274,51 @@ language data) inside its own budget and time out on a slow network.
 **Fix:** `src/lib/extract/ocr.js`: start-up has its own limit (`OCR_WORKER_START_BUDGET_MS`, 30 s) and the per-certificate
 budget (8 s) starts only once the engine is ready.
 **Guard:** the Phase 2 timeout test (`?budget=1`) still passes; `e2e/tamper.spec.js` runs the engine cold in every test.
+
+## C-019 — A measurement run that looked like a regression: slower machine, and a hot reload that emptied the source box
+**Phase:** 4 (review follow-up) · **Date:** 2026-11-10
+**Symptom:** after adding the second OCR read, the timing run showed PDFs adding 2.2 to 3.0 s (0.6 to 0.7 s before), a screenshot
+extraction at 2.9 s (0.93 s before), and two of four samples as "Not checked" although the same files gave the right verdicts in
+the browser tests.
+**Root cause (two separate things):** (1) The whole session ran about twice as slow: a stage I had not touched (the roll-number OCR) went from
+about 175 ms to 335 ms, so absolute numbers from the earlier session are not comparable (the machine looked idle, 3 % busy, when
+sampled; the cause of the slowdown is not known). (2) "Not checked" was the measurement script's fault: the checks said "No NPTEL
+source was provided", because the dev page can hot-reload between filling the source-map box and choosing the files, which empties
+the box. The evidence itself was fine (render OCR agreed, confidence 92 and 96).
+**Fix:** a fresh dev server, a script that confirms the box holds the source before choosing files, and the same guard in the e2e
+helper (`assess()` in `e2e/tamper.spec.js`). The cost of the second read was measured as an A/B with a temporary switch, interleaved
+in one session so drift cancels (15 runs per cell), and the switch was removed afterwards.
+**Guard:** the helper check; and never compare absolute timings across sessions without a control.
+
+## C-020 — `@auth/mongodb-adapter` needs `mongodb` 6, the project had 7.8.0
+
+**Phase 5.** The official adapter's peer range is `mongodb ^6`; the project pinned `7.8.0` (Phase 1). `npm install` refused it.
+**Fix:** pinned `mongodb` to `6.22.0` (the driver is used only through `getDb`/`getClientPromise`, so nothing else changed). Chosen over
+`--legacy-peer-deps` (it would break `npm ci` on Vercel) and over a hand-written adapter (more code to get wrong in the part of the
+system that matters most). Revisit when the adapter supports 7.
+
+## C-021 — The sign-in forms submitted natively before React hydrated, putting the email and password in the URL
+
+**Phase 5, found by Playwright.** The first test run landed on `/signup?email=&password=`: a click before hydration is a plain HTML form
+submit (GET), which puts credentials in the address bar and the history. Real users on a slow connection can do the same.
+**Fix:** `AccountForm` is `method="post"` and its button is disabled until hydration (`useSyncExternalStore` as the flag); a native
+submit can then never carry values in a URL.
+**Guard:** the Playwright auth spec clicks as soon as the button is enabled.
+
+## C-022 — Playwright failures that were not bugs: route compilation reloads and a second `role="alert"`
+
+**Phase 5.** (1) `next dev` compiles a route on its first request and may hot-reload the page under a test: the form emptied mid-fill.
+`e2e/global-setup.js` now requests every route once before the tests. (2) Next.js adds its own `role="alert"` element (the route
+announcer), so `getByRole('alert')` is ambiguous; the auth spec uses a locator that excludes it.
+
+## C-023 — `/api/verify` is closed, so every browser test that used it needed an account
+
+**Phase 5.** After the Phase 3 guard was replaced by `requireUser()`, `e2e/verify.spec.js` and the LIVE test in `e2e/tamper.spec.js`
+got 401. They now sign up, confirm and sign in through the real endpoints (`e2e/helpers/auth.js`) instead of a test-only backdoor. The
+LIVE test also failed once, in the run before that fix was complete, with a verification `Error` and passed on the next run;
+it calls the real NPTEL, so one-off network results are possible (I did not investigate further).
+
+## C-024 — A bcrypt cost of 12 makes the flow tests slow
+
+**Phase 5.** Each hash or comparison at cost 12 takes a few hundred ms, so the 22 flow tests exceed Vitest's 5 s default. The cost is
+the plan's and stays; `tests/unit/auth.flows.test.js` sets a 60 s timeout instead of weakening it for tests.

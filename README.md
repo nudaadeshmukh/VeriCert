@@ -49,8 +49,22 @@ in Vercel for Preview and Production.
 | `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`         | Phase 5     | Google Cloud Console OAuth client                              |
 | `RESEND_API_KEY`, `EMAIL_FROM`                 | Phase 5     |                                                                |
 | `ALLOWED_EMAIL_DOMAIN`, `ADMIN_EMAILS`         | Phase 5     |                                                                |
-| `VERIFY_DEV_ENDPOINT`                          | Phase 3 only | `1` on Vercel **Preview** only; removed in Phase 5. Ignored on Production |
-| `VERCEL_AUTOMATION_BYPASS_SECRET`              | Phase 3 only | Local `.env` only, for `npm run smoke:nptel` against a Preview |
+| `VERCEL_AUTOMATION_BYPASS_SECRET`              | Phase 3     | Local `.env` only, for `npm run smoke:nptel` against a Preview |
+| `SMOKE_SESSION_COOKIE`                         | Phase 5     | Local `.env` only: a real session cookie for `smoke:nptel` (see below) |
+| `AUTH_EMAIL_STUB`                              | Phase 5     | Local/test only: write emails to `tmp/mail-outbox.jsonl`. Refused in production and on Vercel |
+
+`VERIFY_DEV_ENDPOINT` no longer exists (Phase 3's temporary switch). If it is still set in Vercel, delete it.
+
+### Refreshing `SMOKE_SESSION_COOKIE`
+
+`npm run smoke:nptel -- --base-url=https://<deployment>` calls `/api/verify`, which needs a signed-in user.
+
+1. Open the deployment in your browser (a Preview needs your Vercel login first) and sign in as your own `@pict.edu` account.
+2. DevTools → Application → Cookies → the deployment's origin. Copy the **value** of `__Secure-authjs.session-token`.
+3. Put it in your local `.env` as one line: `SMOKE_SESSION_COOKIE=__Secure-authjs.session-token=<value>` (on plain http, the cookie is called `authjs.session-token`).
+4. Sessions last 7 days. When the script says the cookie was refused, repeat. Signing out in the browser revokes it at once.
+
+The script sends it only as a `Cookie` header and never prints it. It is a real session: treat it like a password, and never commit or share it.
 | `RATE_LIMIT_VERIFY_PER_MIN`                    | Phase 8     |                                                                |
 | `RESULT_RETENTION_DAYS`                        | Phase 1     | Read by `npm run db:indexes` (TTL); default 180                |
 
@@ -78,7 +92,7 @@ src/lib/db/          client.js (cached MongoClient), indexes.js
 src/lib/extract/     browser extraction engine: index.js (extractCertificate), pdf.js, qr.js,
                      ocr.js, image.js, vendor.js, and parse.js (pure; shared with the server later)
 src/lib/verify/      server: fetchSource.js (allowlisted fetch), parseSource.js, readPdf.js (unpdf),
-                     dedupe.js, guard.js (temporary endpoint guard), index.js (verifySource)
+                     dedupe.js, index.js (verifySource)
 src/lib/compare.js   marks (±0.01) and name/course checks
 src/lib/tamper/      checks.js (six checks and the verdict), metadata.js (raw PDF bytes), config.js (every threshold,
                      each with its evidence); pure, no browser APIs

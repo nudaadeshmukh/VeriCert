@@ -59,8 +59,13 @@ Pin every dependency to an exact version. Record the versions in `docs/progress.
    error result in a refusal, never a silent pass.
 6. **No third state for verdicts.** Verification is `Successful`, `Unsuccessful` or
    `Error` (with a reason). Tampering is `No tampering detected`, `Tampering detected` or
-   `Not checked` (with a reason). An unreadable value is never treated as a match or as
-   tampering. It is "not confirmed", and the row says why.
+   `Not checked` (with a reason). An unreadable or low-confidence value is never treated as
+   a match or as tampering. It is "not confirmed" (for a name or course: "could not be
+   confirmed – check manually"), and the row says why. Confident OCR is different: a
+   name or course that OCR read confidently, that a second independent OCR read agreed
+   with, and that is clearly different from the other source (the bounds are in
+   `src/lib/tamper/config.js`, each justified against the genuine samples) IS a mismatch,
+   and fails the check. The row detail always shows both texts side by side.
 7. **Tampering heuristics must be justified by genuine samples.** Never flag a signal you
    haven't confirmed against a known-genuine certificate. Put every threshold in
    `src/lib/tamper/config.js` with a comment explaining it.
@@ -114,12 +119,15 @@ Pin every dependency to an exact version. Record the versions in `docs/progress.
   assignment and exam marks are only in the certificate PDF the page links to.**
 - QR codes on images can be small (around 55 px). Decoding needs a 2–3x upscale.
 - An older or alternate URL shape exists: `nptel.ac.in/noc/E_Certificate/…`.
-- Genuine PDF metadata: the Jan–Apr 2025 sample has Producer `FPDF 1.81` and a
-  CreationDate. The Jul–Sep 2026 sample has neither. Each has exactly one `%%EOF`.
+- Genuine PDF metadata (NOTES.md §1 and §6): the Jan–Feb 2025 sample has Producer
+  `FPDF 1.81` and a CreationDate. The Jul–Sep 2026 sample has Producer `MuPDF 1.28.2`,
+  held in an `/Info` dictionary referenced from the Catalog, which pdf.js does not report
+  (read the raw bytes), and no dates. Neither has a Creator or a ModDate; each has exactly
+  one `%%EOF`.
 - **pdf.js detaches the ArrayBuffer** when it hands it to its worker. Copy the bytes
   (`bytes.slice()`) before any second use, such as the metadata scan.
-- OCR misreads names (a name came out as "7"). Treat malformed OCR output as "not
-  confirmed", never as a mismatch.
+- OCR misreads names (a name came out as "7"). Treat malformed or low-confidence OCR
+  output as "not confirmed", never as a mismatch (rule 6 says when confident OCR does count).
 - Devanagari vowel signs are combining marks. Name normalisation and "is this a real
   name" checks must handle Unicode properly.
 - Full-page OCR on near-blank PDFs took about 30 seconds each. OCR only small crops, under

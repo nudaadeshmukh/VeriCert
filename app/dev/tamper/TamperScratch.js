@@ -7,7 +7,7 @@ import { useState } from 'react';
  *
  * NPTEL's source for a file comes from, in order:
  *   1. the "source map" box: JSON { "<file name>": <verifySource result> }, so tests need no network;
- *   2. with `?live=1`, the real POST /api/verify (enabled on the dev server) using the QR URL;
+ *   2. with `?live=1`, the real POST /api/verify (needs a signed-in session since Phase 5) using the QR URL;
  *   3. otherwise "no source" (`source_unavailable`).
  * `?measure=1` also runs the extraction WITHOUT evidence first, to measure what the tampering checks add.
  */
