@@ -230,3 +230,25 @@ describe('Google sign-in decision', () => {
     ).toBe(false);
   });
 });
+
+describe('email send failures are logged with a reason that cannot leak', () => {
+  it('logs our own messages and reduces anything else to "other"', async () => {
+    const logged = [];
+    console.error.mockImplementation((l) => logged.push(l));
+    const failWith = (message) => async () => {
+      throw new Error(message);
+    };
+    let r = await signupFlow(
+      ctx({ email: 'a1@pict.edu', password: GOOD, send: failWith('email provider answered HTTP 403') }),
+    );
+    expect(r.status).toBe(503);
+    r = await signupFlow(
+      ctx({ email: 'a2@pict.edu', password: GOOD, send: failWith('boom for a2@pict.edu key re_abc123') }),
+    );
+    expect(r.status).toBe(503);
+    const lines = logged.map((l) => JSON.parse(l));
+    expect(lines[0]).toMatchObject({ event: 'signup_failed', reason: 'email provider answered HTTP 403' });
+    expect(lines[1]).toMatchObject({ event: 'signup_failed', reason: 'other' });
+    expect(logged.join('')).not.toMatch(/a2@pict\.edu|re_abc123/);
+  });
+});

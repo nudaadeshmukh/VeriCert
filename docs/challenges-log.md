@@ -318,6 +318,25 @@ got 401. They now sign up, confirm and sign in through the real endpoints (`e2e/
 LIVE test also failed once, in the run before that fix was complete, with a verification `Error` and passed on the next run;
 it calls the real NPTEL, so one-off network results are possible (I did not investigate further).
 
+## C-025 — Preview manual test, second run: Google `client_id` still missing, email send still failing
+
+**Phase 5, 2026-11-10.** After the user re-set the Preview variables and redeployed, `/login` → Google still gave "Missing required
+parameter: client_id" and `/signup` still gave the generic 503. Vercel logs (read-only, `vercel logs --project veri-cert --json`):
+`signup_failed` with only the class name `Error` (the log hid the reason), and `/login`: `MongoServerSelectionError: Server selection
+timed out after 5000 ms` as an **unhandled rejection that exited the function (status 128)**.
+**Local check:** the same code, with the local `.env`, redirects to Google with a 72-character `client_id`. So the code is not the cause.
+`vercel env ls` (names only) shows each variable once for "Production, Preview" (so `AUTH_SECRET` and `AUTH_URL` are NOT separate per
+environment) and every variable, including the supposedly new `RESEND_API_KEY`, as "created 4d ago".
+**Fixes in code:** `auth.js` throws `Missing required environment variable <NAME>` for an empty `AUTH_SECRET`/`AUTH_GOOGLE_ID`/
+`AUTH_GOOGLE_SECRET`; the adapter gets `() => getClientPromise()` so nothing connects (or rejects unhandled) unless it is used;
+`flows.js` logs a whitelisted `reason` for failed email sends (our own messages only, tested not to leak an address or key).
+**Real root cause (confirmed by the user):** the Vercel environment variables were missing entirely. The code was not at fault.
+**Third run, after the user added them and redeployed `fd173d2`:** Google now receives a client ID and the sign-up email is sent, but
+(a) the Google `redirect_uri` is `http://localhost:3000/api/auth/callback/google`, so Preview's `AUTH_URL` is still the local value;
+(b) the `/login` unhandled `MongoServerSelectionError` crash (exit 128) happens again, on the Google click: the lazy-client fix is not in
+that deployment. `vercel env ls` still showed the old list (VERIFY_DEV_ENDPOINT present, one shared AUTH_URL/AUTH_SECRET, "4d ago"), which
+disagreed with what the user had set; I did not resolve that discrepancy.
+
 ## C-024 — A bcrypt cost of 12 makes the flow tests slow
 
 **Phase 5.** Each hash or comparison at cost 12 takes a few hundred ms, so the 22 flow tests exceed Vitest's 5 s default. The cost is

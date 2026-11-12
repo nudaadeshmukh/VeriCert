@@ -39,7 +39,7 @@ exists. Update it last, at the end of every phase, after the phase's code actual
 | 2 — Certificate extraction engine | ✅ complete (verified in local Chromium; not deployed) |
 | 3 — Verification service and comparison | ✅ complete (gate passed: live smoke from a Vercel Preview, region bom1) |
 | 4 — Tampering checks | ✅ complete (verified in local Chromium; not deployed) |
-| 5 — Authentication | 🟡 code complete; awaiting the user's manual test on the Preview (Google, Resend) |
+| 5 — Authentication | 🟡 code complete; Preview manual test blocked by deployment env (Google client_id, email send) |
 | 6 — Persistence and history | ⏳ not started |
 | 7 — Dashboard UI | ⏳ not started |
 | 8 — Admin, security hardening, abuse protection | ⏳ not started |
@@ -763,8 +763,8 @@ saved results and counts (Phase 6) and the CSV mapping (`Not checked` is written
 
 ## Phase 5 — Authentication
 
-**Status:** code complete, tests green locally; **awaiting the user's manual test on the `git-temp` Preview** (Google sign-in, the
-refusal of a non-PICT account, email sign-up/verification/reset with real Resend mail). Not deployed by me (rule 13).
+**Status:** code complete, tests green locally. **The manual test on the `git-temp` Preview is blocked** (see "Manual test" below):
+Google sign-in and email sign-up both fail on that deployment, most likely Preview environment variables. Not approved. Not deployed by me (rule 13).
 
 **Branch:** `temp` (rule 14). **Before starting:** the Phase 4 review follow-up is still UNCOMMITTED in the working tree (13 files:
 `CLAUDE.md`, `NOTES.md`, `compare.js`, `tamper/*`, `extract/*`, their tests…). Remote `temp` is `65d6107`. Commit it separately first.
@@ -841,6 +841,37 @@ refusal of a non-PICT account, email sign-up/verification/reset with real Resend
 **Not tested here (needs the user, see the checklist):** the Google round trip, real Resend delivery, behaviour behind Vercel's
 Deployment Protection. The unit tests cover the decision logic; the live OAuth flow has not been run by me.
 
+**Manual test on the `git-temp` Preview (deployment `fd173d2`, Claude in Chrome, 2026-11-10): BLOCKED, 1 of 4 steps passed.**
+| Step | Result | Evidence |
+|---|---|---|
+| 1 Google sign-in as the `@pict.edu` account | **FAIL** | Google showed "Access blocked: Authorization Error, Missing required parameter: client_id, Error 400: invalid_request". The authorize request carried no client ID, so `AUTH_GOOGLE_ID` is not reaching this deployment (names checked only; it is set in the local `.env`). |
+| 2 Non-PICT Google account refused and logged | **NOT RUN** | Blocked by step 1 (same Google error before any consent screen; the app's callback never ran, so no `audit_logs` row can exist). |
+| 3 Email sign-up → verify → login → logout → reset | **FAIL at sign-up** | `/signup` answered "We could not send the confirmation email just now" (the generic 503): the email send threw. Cause not yet confirmed: `RESEND_API_KEY` / `EMAIL_FROM` missing on Preview, or Resend refusing. The account row may exist unverified. Rest not run. |
+| 4 `/api/verify` without a session | **PASS** | HTTP 401 `{"error":"no_session"}` through the bypass header, region `bom1`. |
+| 5 GIF | 5 frames captured of the failing steps, not exported (nothing worth sharing). |
+A test password was generated for the sign-up attempt and noted outside the repo (the session scratchpad). Both failures point at Preview
+environment variables (scope or branch), not at the code: the same code passes the same flows locally against the test database.
+Not yet checked: whether the Vercel logs show a different error.
+
+**Second run (same day, after the user re-set the Preview variables and redeployed without cache): steps 1 and 3 still FAIL, step 2
+not run.** Same Google `client_id` error and same sign-up 503. Logs: see C-025. Local reproduction shows the code sends a client ID, so
+the values are not reaching the deployment. Code changes made after the run (not deployed): named missing-variable errors in `auth.js`,
+a lazy database client for the adapter (the logs showed an unhandled `MongoServerSelectionError` crashing `/login`), and a whitelisted
+`reason` in the signup/forgot failure logs. Vitest on the touched files: 41 passed.
+
+**Third run (variables added in Vercel by the user, `fd173d2` redeployed as Preview; my uncommitted fixes NOT in it):**
+| Step | Result |
+|---|---|
+| 1 Google | **Partial.** Google's sign-in page now opens (client ID present), but its `redirect_uri` is `http://localhost:3000/...`: Preview's `AUTH_URL` is the local value. Not continued (a completed sign-in would return to localhost). |
+| 2 Non-PICT refused and logged | **Not run** (needs step 1). |
+| 3 Email sign-up | **Sign-up passes** ("we have sent a confirmation email"). Verification, login, logout and reset **not run**: the only Chrome Google session is `nudaadeshmukh@gmail.com`; the `sbdeshmukh@pict.edu` mailbox is not open there, and I will not enter a password. |
+Logs: no sign-up error this time. `/login` on the Google click again logged `MongoServerSelectionError: Server selection timed out after 5000 ms`
+as an unhandled rejection (exit 128): the lazy-client fix is not deployed. `vercel env ls` still shows the old list; unexplained.
+
+**Also in this pass:** the home page (`app/page.js`) now links to `/login` instead of saying sign-in is unavailable (`e2e/smoke.spec.js`
+updated, 4 passed). `package.json` `engines.node` is `24.x` and local Node is 24.18.1; for the Vercel "Node.js Version Override"
+warning, set the project's Node.js Version (Settings → Build and Deployment) to 24.x so it matches; I changed nothing on Vercel.
+
 **Decisions to review (rule 11):**
 1. `proxy.js` instead of `middleware.js` (Next 16). Cookie-presence check only; authorisation is `requireUser()`.
 2. Credentials sign-in through our own routes rather than Auth.js' Credentials provider (database sessions).
@@ -861,7 +892,7 @@ have no pages yet.
 **Known issues / TODOs:**
 | # | Item | Priority | Blocking |
 |---|---|---|---|
-| 1 | Google OAuth, real email delivery and Vercel-protected Preview were not exercised by me | High | Approval |
+| 1 | On the Preview, Google sign-in (missing `client_id`) and sign-up email (503) fail; cause is unconfirmed, probably Preview env scope | High | Approval |
 | 2 | `onboarding@resend.dev` can only deliver to the Resend account owner's address; other users need a verified domain (Phase 3 plan, item 3) | Medium | Phase 10 |
 | 3 | The proxy cannot read the database, so a revoked cookie still reaches the route, where `requireUser()` refuses it (by design) | Low | None |
 | 4 | Email change, account deletion and an admin "disable user" screen are not built | Low | Phase 8 |

@@ -35,9 +35,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
   const domain = allowedDomain(); // throws if ALLOWED_EMAIL_DOMAIN is missing: the request fails closed
   const databaseName = process.env.MONGODB_DB;
   if (!databaseName) throw new Error('Missing required environment variable MONGODB_DB');
+  // Fail closed with the NAME of what is missing (never a value). Without this a missing Google client ID only shows up as an error
+  // page on accounts.google.com.
+  for (const name of ['AUTH_SECRET', 'AUTH_GOOGLE_ID', 'AUTH_GOOGLE_SECRET']) {
+    if (!process.env[name]?.trim()) throw new Error(`Missing required environment variable ${name}`);
+  }
 
   return {
-    adapter: MongoDBAdapter(getClientPromise(), { databaseName }),
+    // A function, so the connection is made only when the adapter needs it. Passing the promise itself started a connection on every
+    // request, and when nothing awaited it (a refused sign-in) a failed connection became an unhandled rejection that crashed the function.
+    adapter: MongoDBAdapter(() => getClientPromise(), { databaseName }),
     session: { strategy: 'database', maxAge: SESSION_MAX_AGE_SECONDS, updateAge: SESSION_UPDATE_AGE_SECONDS },
     // Vercel is trusted automatically; locally the dev server is. AUTH_URL fixes the public origin used in callbacks.
     trustHost: Boolean(process.env.VERCEL) || process.env.NODE_ENV !== 'production',

@@ -40,6 +40,20 @@ const GENERIC_SIGNUP =
 const GENERIC_FORGOT = 'If that address has an account, we have sent a link to choose a new password.';
 const BAD_LOGIN = 'Invalid email or password.';
 
+/**
+ * Why an email send failed, for the log. Only OUR messages ("email is not configured", "email provider answered HTTP 403") pass; anything
+ * else is reduced to its class name, so an address or a key can never reach a log through an error text.
+ * @param {unknown} err
+ */
+function safeReason(err) {
+  const m = err instanceof Error ? err.message : '';
+  return /^(email is not configured|email provider answered HTTP \d{3}|Missing required environment variable [A-Z_]+)$/.test(
+    m,
+  )
+    ? m
+    : 'other';
+}
+
 /** @param {number} status @param {string} error @param {string} message @param {Record<string, unknown>} [extra] @returns {FlowResult} */
 const fail = (status, error, message, extra = {}) => ({
   status,
@@ -120,7 +134,9 @@ export async function signupFlow({
     await writeAudit(db, { action: 'signup', userId: user._id, target: email, meta: {}, ip });
     return ok(GENERIC_SIGNUP);
   } catch (err) {
-    console.error(JSON.stringify({ event: 'signup_failed', error: err?.name ?? 'Error' }));
+    console.error(
+      JSON.stringify({ event: 'signup_failed', error: err?.name ?? 'Error', reason: safeReason(err) }),
+    );
     return fail(
       503,
       'unavailable',
@@ -260,7 +276,9 @@ export async function forgotPasswordFlow({
       }
     }
   } catch (err) {
-    console.error(JSON.stringify({ event: 'forgot_failed', error: err?.name ?? 'Error' }));
+    console.error(
+      JSON.stringify({ event: 'forgot_failed', error: err?.name ?? 'Error', reason: safeReason(err) }),
+    );
     return fail(503, 'unavailable', 'We could not send the email just now. Please try again later.');
   }
   return ok(GENERIC_FORGOT);
